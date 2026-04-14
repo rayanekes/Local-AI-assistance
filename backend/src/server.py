@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import logging
 import websockets
 import re
 import numpy as np
@@ -11,6 +12,9 @@ from collections import deque
 from faster_whisper import WhisperModel
 from silero_vad import load_silero_vad, get_speech_timestamps
 from llama_cpp import Llama
+
+# Configurer le logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -27,7 +31,7 @@ def charger_memoire():
                 mem = json.load(f)
                 return mem.get("contexte_utilisateur", "Aucun contexte particulier.")
         except Exception as e:
-            pass
+            logging.error(f"Erreur lors du chargement de la mémoire : {e}")
     return "L'utilisateur est un étudiant/ingénieur travaillant sur un ESP32."
 
 def sauvegarder_memoire(nouveau_contexte):
@@ -56,7 +60,7 @@ async def synthese_memoire_background(nouvelle_info, llm_instance):
         nouveau_contexte = res["choices"][0]["message"]["content"].strip()
         await asyncio.to_thread(sauvegarder_memoire, nouveau_contexte)
     except Exception as e:
-        pass
+        logging.error(f"Erreur lors de la synthèse de la mémoire : {e}")
 
 # =========================
 # CONFIGURATION MATÉRIEL
@@ -183,8 +187,8 @@ async def handle_esp32_connection(websocket):
                 if not audio_out:
                     break
                 await websocket.send(audio_out)
-        except Exception:
-            pass
+        except Exception as e:
+            logging.error(f"Erreur lors de la lecture du flux Piper : {e}")
 
     def transcribe_audio(wav_path):
         custom_vocab = "Terminale STE, ADC, ATC, PE, Transmettre, ESP32."
