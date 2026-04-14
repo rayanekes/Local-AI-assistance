@@ -1,0 +1,335 @@
+import os
+import json
+import asyncio
+import websockets
+import re
+import numpy as np
+import torch
+import scipy.io.wavfile as wav
+from collections import deque
+
+from faster_whisper import WhisperModel
+from silero_vad import load_silero_vad, get_speech_timestamps
+from llama_cpp import Llama
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# =========================
+# GESTION MÉMOIRE DYNAMIQUE (RAG)
+# =========================
+
+MEMORY_FILE = os.path.join(BASE_DIR, "memory", "memoire_utilisateur.json")
+
+def charger_memoire():
+    if os.path.exists(MEMORY_FILE):
+        try:
+            with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
+                mem = json.load(f)
+                return mem.get("contexte_utilisateur", "Aucun contexte particulier.")
+        except Exception as e:
+            pass
+    return "L'utilisateur est un étudiant/ingénieur travaillant sur un ESP32."
+
+def sauvegarder_memoire(nouveau_contexte):
+    with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
+        json.dump({"contexte_utilisateur": nouveau_contexte},
+                  f, ensure_ascii=False, indent=4)
+
+async def synthese_memoire_background(nouvelle_info, llm_instance):
+    mem_actuelle = charger_memoire()
+
+    prompt_synthese = (
+        f"Tu es un module cognitif. Voici la mémoire actuelle de l'utilisateur: '{mem_actuelle}'. "
+        f"Voici la dernière information de la conversation: '{nouvelle_info}'. "
+        "Mets à jour la mémoire globale en une phrase concise en français, sans aucun format JSON."
+    )
+
+    try:
+        def run_llm():
+            return llm_instance.create_chat_completion(
+                messages=[{"role": "system", "content": prompt_synthese}],
+                max_tokens=50,
+                temperature=0.3
+            )
+
+        res = await asyncio.to_thread(run_llm)
+        nouveau_contexte = res["choices"][0]["message"]["content"].strip()
+        await asyncio.to_thread(sauvegarder_memoire, nouveau_contexte)
+    except Exception as e:
+        pass
+
+# =========================
+# CONFIGURATION MATÉRIEL
+# =========================
+
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+INPUT_WAV = os.path.join(BASE_DIR, "input.wav")
+
+SAMPLE_RATE_MIC = 16000
+SAMPLE_RATE_TTS = 22050
+CHUNK_SIZE_MIC = 1024
+
+LLM_MODEL_PATH = os.path.join(MODELS_DIR, "qwen2.5-3b-instruct-q5_k_m.gguf")
+WHISPER_MODEL = "small"
+WHISPER_DEVICE = "cuda"
+
+PIPER_BIN = os.path.join(BASE_DIR, "piper", "piper")
+PIPER_MODEL = os.path.join(BASE_DIR, "piper", "fr_FR-siwis-medium.onnx")
+
+memoire_dynamique = charger_memoire()
+
+SYSTEM_PROMPT = (
+    "You are an interactive engineering robot assistant. "
+    f"Here is what you know about the user so far: {memoire_dynamique}\n"
+    "The user's input will be provided in English (translated from Moroccan Darija and French). "
+    "You must understand perfectly, BUT you MUST reply ONLY in pure and natural French. "
+    "Never generate words in Arabic or English in your spoken response. "
+    "You also control a hardware system with an ILI9341 TFT screen. "
+    "You MUST ALWAYS respond with a strictly valid JSON object in the following format:\n"
+    "{\n"
+    "  \"speech\": \"Texte en français pur pour le robot.\",\n"
+    "  \"emotion\": \"joie|neutre|triste\",\n"
+    "  \"gpio_commands\": [{\"pin\": 4, \"state\": true}]\n"
+    "}\n"
+    "Return NOTHING except the valid JSON."
+)
+
+conversation_history = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+# =========================
+# INITIALISATION ML
+# =========================
+
+try:
+    whisper = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type="float16")
+except Exception as e:
+    whisper = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+
+vad_model = load_silero_vad()
+
+llm = Llama(
+    model_path=LLM_MODEL_PATH,
+    n_gpu_layers=-1,
+    n_ctx=4096,
+    verbose=False
+)
+
+# =========================
+# OUTILS
+# =========================
+
+class JSONSpeechExtractor:
+    def __init__(self):
+        self.state = 'WAIT'
+        self.buffer = ""
+
+    def extract_chunk(self, token):
+        self.buffer += token
+        if self.state == 'WAIT':
+            match = re.search(r'"speech"\s*:\s*"', self.buffer)
+            if match:
+                self.state = 'EXTRACTING'
+                self.buffer = self.buffer[match.end():]
+            elif len(self.buffer) > 100:
+                self.buffer = self.buffer[-50:]
+            return ""
+
+        if self.state == 'EXTRACTING':
+            match = re.search(r'(?<!\\)"', self.buffer)
+            if match:
+                self.state = 'FINISHED'
+                speech = self.buffer[:match.start()]
+                self.buffer = self.buffer[match.end():]
+                return speech
+            if len(self.buffer) > 1:
+                speech = self.buffer[:-1]
+                self.buffer = self.buffer[-1:]
+                return speech
+        return ""
+
+def split_tts_sentence(buffer):
+    match = re.search(r'([.?!]+)', buffer)
+    if match and match.end() >= 10:
+        return buffer[:match.end()], buffer[match.end():]
+    return None, buffer
+
+# =========================
+# SERVEUR WEBSOCKET ASYNC
+# =========================
+
+async def handle_esp32_connection(websocket):
+    is_speaking = False
+    robot_is_answering = False
+    interrupt_flag = False
+
+    audio_buffer = []
+    pre_roll = deque(maxlen=8)
+    silence_frames = 0
+    silence_threshold = 20
+
+    async def send_json_command(cmd_type, value=None, emotion=None):
+        payload = {"type": cmd_type}
+        if value: payload["value"] = value
+        if emotion: payload["emotion"] = emotion
+        await websocket.send(json.dumps(payload))
+
+    async def read_piper_stdout(piper_proc, websocket, state_container):
+        try:
+            while True:
+                if state_container["interrupt"]:
+                    piper_proc.terminate()
+                    break
+                audio_out = await piper_proc.stdout.read(4096)
+                if not audio_out:
+                    break
+                await websocket.send(audio_out)
+        except Exception:
+            pass
+
+    def transcribe_audio(wav_path):
+        custom_vocab = "Terminale STE, ADC, ATC, PE, Transmettre, ESP32."
+        prompt_darija_tech = f"Bonjour. Kidayr labas? Wach nbedaw l'installation dial le serveur? {custom_vocab}"
+        segments, _ = whisper.transcribe(
+            wav_path,
+            task="translate",
+            beam_size=2,
+            initial_prompt=prompt_darija_tech
+        )
+        return "".join([s.text for s in segments]).strip()
+
+    async def run_llm_and_tts(transcribed_text):
+        nonlocal robot_is_answering, interrupt_flag
+        robot_is_answering = True
+        interrupt_flag = False
+
+        conversation_history.append({"role": "user", "content": transcribed_text})
+        await send_json_command("status", "thinking")
+
+        extractor = JSONSpeechExtractor()
+        tts_buffer = ""
+        full_llm_response = ""
+
+        piper_proc = await asyncio.create_subprocess_exec(
+            PIPER_BIN, "--model", PIPER_MODEL, "--output_raw",
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+        )
+
+        state_container = {"interrupt": False}
+        stream_task = asyncio.create_task(read_piper_stdout(piper_proc, websocket, state_container))
+
+        def generate_llm_stream():
+            return llm.create_chat_completion(
+                messages=conversation_history,
+                max_tokens=200,
+                temperature=0.7,
+                stream=True
+            )
+
+        await send_json_command("status", "speaking")
+
+        # Wrapping the standard stream generator execution in a thread pool to unblock Asyncio event loop
+        stream_generator = await asyncio.to_thread(generate_llm_stream)
+
+        while True:
+            if interrupt_flag:
+                state_container["interrupt"] = True
+                break
+
+            try:
+                # Yield next token from generator in thread to prevent blocking
+                chunk = await asyncio.to_thread(next, stream_generator)
+            except StopIteration:
+                break
+
+            delta = chunk["choices"][0].get("delta", {})
+            if "content" in delta:
+                token = delta["content"]
+                full_llm_response += token
+
+                emotion_match = re.search(r'"emotion"\s*:\s*"([^"]+)"', full_llm_response)
+                if emotion_match:
+                    await send_json_command("emotion", emotion_match.group(1))
+
+                speech_part = extractor.extract_chunk(token)
+                if speech_part:
+                    speech_part = speech_part.replace('\\n', ' ').replace('\\"', '"')
+                    tts_buffer += speech_part
+
+                    sentence, tts_buffer = split_tts_sentence(tts_buffer)
+                    if sentence:
+                        piper_proc.stdin.write(sentence.encode("utf-8"))
+                        await piper_proc.stdin.drain()
+
+        if tts_buffer.strip() and not interrupt_flag:
+            piper_proc.stdin.write(tts_buffer.encode("utf-8"))
+            await piper_proc.stdin.drain()
+            piper_proc.stdin.close()
+
+        if interrupt_flag:
+            state_container["interrupt"] = True
+            if not piper_proc.stdin.is_closing():
+                piper_proc.stdin.close()
+
+        await stream_task
+
+        if piper_proc.returncode is None:
+            piper_proc.terminate()
+
+        robot_is_answering = False
+        await send_json_command("status", "idle")
+
+        if full_llm_response and not interrupt_flag:
+            conversation_history.append({"role": "assistant", "content": full_llm_response})
+            asyncio.create_task(synthese_memoire_background(transcribed_text, llm))
+
+    try:
+        async for message in websocket:
+            if type(message) is bytes:
+                chunk = np.frombuffer(message, dtype=np.int16)
+                audio_tensor = torch.from_numpy(chunk.astype(np.float32) / 32768.0)
+
+                timestamps = await asyncio.to_thread(get_speech_timestamps, audio_tensor, vad_model, sampling_rate=SAMPLE_RATE_MIC)
+                voice_detected = len(timestamps) > 0
+
+                if not is_speaking:
+                    pre_roll.append(chunk)
+                    if voice_detected:
+                        is_speaking = True
+                        audio_buffer.extend(list(pre_roll))
+                        pre_roll.clear()
+                        silence_frames = 0
+
+                        if robot_is_answering:
+                            interrupt_flag = True
+                else:
+                    audio_buffer.append(chunk)
+                    if voice_detected:
+                        silence_frames = 0
+                    else:
+                        silence_frames += 1
+                        if silence_frames > silence_threshold:
+                            is_speaking = False
+
+                            if interrupt_flag:
+                                audio_buffer = []
+                                continue
+
+                            audio_data = np.concatenate(audio_buffer)
+                            await asyncio.to_thread(wav.write, INPUT_WAV, SAMPLE_RATE_MIC, audio_data)
+                            text = await asyncio.to_thread(transcribe_audio, INPUT_WAV)
+
+                            if text:
+                                asyncio.create_task(run_llm_and_tts(text))
+
+                            audio_buffer = []
+                            silence_frames = 0
+    except websockets.exceptions.ConnectionClosed:
+        pass
+
+
+async def main():
+    async with websockets.serve(handle_esp32_connection, "0.0.0.0", 8765):
+        await asyncio.Future()
+
+if __name__ == "__main__":
+    asyncio.run(main())

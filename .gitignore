@@ -1,0 +1,26 @@
+# Fichiers audio temporaires
+*.wav
+*.mp3
+
+# Dossier d'environnement virtuel
+venv/
+env/
+.venv/
+
+# Mémoire de l'agent
+backend/memory/*.json
+
+# Fichiers de modèles volumineux (LLM, Piper, Whisper)
+backend/models/*.gguf
+backend/piper/*.onnx
+backend/piper/*.json
+backend/piper/piper
+
+# Dossiers générés par Python / C++
+__pycache__/
+*.pyc
+.pio/
+.vscode/
+
+# Fichiers de log
+*.log
