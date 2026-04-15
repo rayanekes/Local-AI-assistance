@@ -1,97 +1,41 @@
 // main.cpp - Point d'entrée pour l'ESP32
 
 #include <Arduino.h>
-#include <SPI.h>
-#include <TFT_eSPI.h>
-#include <SD.h>
 #include <ArduinoJson.h>
+#include "TFT_Display.h"
 
-// Initialisation de l'écran TFT
-TFT_eSPI tft = TFT_eSPI();
+// Instance de l'écran TFT
+TFT_Display display;
 
-// Pin CS pour la carte SD (à adapter selon le câblage)
-#define SD_CS 5
+// File d'attente (Queue) FreeRTOS pour communiquer les émotions entre les cœurs
+QueueHandle_t emotionQueue;
 
-// Variable pour stocker l'émotion actuelle
+// Variable globale pour stocker l'émotion actuelle et éviter les rafraîchissements inutiles
 String currentEmotion = "";
 
-void drawBmp(const char *filename, int16_t x, int16_t y) {
-  if ((x >= tft.width()) || (y >= tft.height())) return;
+// Tâche FreeRTOS exécutée sur le Core 0 pour gérer exclusivement l'écran
+void displayTask(void *pvParameters) {
+  display.init();
 
-  File bmpFS;
-  bmpFS = SD.open(filename, "r");
+  char receivedEmotion[32];
 
-  if (!bmpFS) {
-    Serial.print("File not found: ");
-    Serial.println(filename);
-    return;
-  }
+  for (;;) {
+    // On attend indéfiniment jusqu'à recevoir une nouvelle émotion dans la queue
+    if (xQueueReceive(emotionQueue, &receivedEmotion, portMAX_DELAY) == pdPASS) {
+      String newEmotion = String(receivedEmotion);
 
-  uint32_t seekOffset;
-  uint16_t w, h, row, col;
-  uint8_t  r, g, b;
+      if (newEmotion != currentEmotion) {
+        Serial.print("[Core 0] Affichage de la nouvelle émotion: ");
+        Serial.println(newEmotion);
 
-  if (bmpFS.read() == 'B' && bmpFS.read() == 'M') {
-    bmpFS.read(); bmpFS.read(); bmpFS.read(); bmpFS.read();
-    bmpFS.read(); bmpFS.read(); bmpFS.read(); bmpFS.read();
-    seekOffset = bmpFS.read() | (bmpFS.read() << 8) | (bmpFS.read() << 16) | (bmpFS.read() << 24);
-    bmpFS.read(); bmpFS.read(); bmpFS.read(); bmpFS.read();
-
-    w = bmpFS.read() | (bmpFS.read() << 8) | (bmpFS.read() << 16) | (bmpFS.read() << 24);
-    h = bmpFS.read() | (bmpFS.read() << 8) | (bmpFS.read() << 16) | (bmpFS.read() << 24);
-
-    bmpFS.read(); bmpFS.read();
-    uint16_t depth = bmpFS.read() | (bmpFS.read() << 8);
-
-    if (depth == 24) {
-      bmpFS.seek(seekOffset);
-
-      uint16_t padding = (4 - ((w * 3) & 3)) & 3;
-      uint8_t lineBuffer[w * 3 + padding];
-
-      for (row = 0; row < h; row++) {
-        bmpFS.read(lineBuffer, sizeof(lineBuffer));
-        uint8_t* bptr = lineBuffer;
-        for (col = 0; col < w; col++) {
-          b = *bptr++;
-          g = *bptr++;
-          r = *bptr++;
-          tft.drawPixel(x + col, y + h - 1 - row, tft.color565(r, g, b));
-        }
+        display.displayEmotion(newEmotion);
+        currentEmotion = newEmotion;
       }
-    } else {
-      Serial.println("BMP format not supported.");
     }
   }
-  bmpFS.close();
 }
 
-void setup() {
-  Serial.begin(115200);
-  Serial.println("Démarrage du robot...");
-
-  // Initialisation du TFT
-  tft.init();
-  tft.setRotation(1); // Format paysage (ajuster selon le besoin)
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setTextSize(2);
-  tft.setCursor(10, 10);
-  tft.println("Robot AI Booting...");
-
-  // Initialisation de la carte SD
-  if (!SD.begin(SD_CS)) {
-    Serial.println("Erreur: Carte SD introuvable ou erreur SPI.");
-    tft.println("Erreur SD!");
-  } else {
-    Serial.println("Carte SD initialisée.");
-    tft.println("SD OK!");
-
-    // Exemple : Afficher l'image par défaut "neutre.bmp" si elle existe
-    // drawBmp("/neutre.bmp", 0, 0);
-  }
-}
-
+// Fonction appelée par la boucle principale (Core 1) lors de la réception d'un JSON
 void parseAndHandleJSON(String jsonString) {
   StaticJsonDocument<512> doc;
   DeserializationError error = deserializeJson(doc, jsonString);
@@ -102,35 +46,54 @@ void parseAndHandleJSON(String jsonString) {
     return;
   }
 
-  // Extraire l'émotion
+  // Si le JSON contient une émotion, on l'envoie à la tâche d'affichage via la Queue
   if (doc.containsKey("emotion")) {
     const char* emotion = doc["emotion"];
-    String newEmotion = String(emotion);
+    char emotionToSend[32];
+    strncpy(emotionToSend, emotion, sizeof(emotionToSend) - 1);
+    emotionToSend[sizeof(emotionToSend) - 1] = '\0';
 
-    if (newEmotion != currentEmotion) {
-      Serial.print("Nouvelle émotion reçue: ");
-      Serial.println(newEmotion);
-      currentEmotion = newEmotion;
-
-      // Charger l'image correspondante (ex: "/joie.bmp")
-      String bmpPath = "/" + currentEmotion + ".bmp";
-      tft.fillScreen(TFT_BLACK); // Nettoyer l'écran avant d'afficher
-      drawBmp(bmpPath.c_str(), 0, 0);
-    }
+    // Envoyer l'émotion dans la file d'attente
+    xQueueSend(emotionQueue, &emotionToSend, portMAX_DELAY);
   }
 
-  // Afficher le texte généré (optionnel pour le debug)
   if (doc.containsKey("speech")) {
     const char* speech = doc["speech"];
-    Serial.print("Speech: ");
+    Serial.print("[Core 1] Speech généré: ");
     Serial.println(speech);
   }
 }
 
+void setup() {
+  Serial.begin(115200);
+  Serial.println("Démarrage du robot...");
+
+  // Création de la file d'attente (jusqu'à 5 émotions de 32 caractères max)
+  emotionQueue = xQueueCreate(5, sizeof(char[32]));
+
+  if (emotionQueue == NULL) {
+    Serial.println("Erreur: Impossible de créer la file d'attente FreeRTOS.");
+    while (1); // Bloquer l'exécution en cas d'erreur critique
+  }
+
+  // Création de la tâche dédiée à l'écran sur le Core 0
+  xTaskCreatePinnedToCore(
+    displayTask,    /* Fonction de la tâche */
+    "DisplayTask",  /* Nom de la tâche */
+    4096,           /* Taille de la pile (Stack size) en mots (words) */
+    NULL,           /* Paramètres */
+    1,              /* Priorité de la tâche (1 = basse) */
+    NULL,           /* Handle de la tâche */
+    0               /* Core 0 (0 pour l'écran, 1 pour l'I2S/Wi-Fi) */
+  );
+
+  Serial.println("Initialisation FreeRTOS terminée.");
+}
+
 void loop() {
   // --- Simulation de réception JSON ---
-  // Dans le code final, ce JSON viendra du WebSocket.
-  // Ici on simule un changement d'émotion toutes les 5 secondes pour tester le parsing et l'affichage.
+  // Le Core 1 gérera ici la réception WebSocket et l'audio I2S.
+  // Pour l'instant, on simule l'arrivée d'un JSON toutes les 5 secondes.
 
   static unsigned long lastUpdate = 0;
   static int state = 0;
@@ -143,15 +106,14 @@ void loop() {
       fakeJson = "{\"speech\": \"Bonjour je suis content.\", \"emotion\": \"joie\"}";
       state = 1;
     } else if (state == 1) {
-      fakeJson = "{\"speech\": \"Je ne sais pas.\", \"emotion\": \"neutre\"}";
+      fakeJson = "{\"speech\": \"Je suis en attente.\", \"emotion\": \"neutre\"}";
       state = 2;
     } else {
       fakeJson = "{\"speech\": \"Oh non c'est dommage.\", \"emotion\": \"triste\"}";
       state = 0;
     }
 
-    Serial.println("\n--- Simulation réception WebSocket ---");
-    Serial.println(fakeJson);
+    Serial.println("\n[Core 1] Simulation réception WebSocket...");
     parseAndHandleJSON(fakeJson);
   }
 }
