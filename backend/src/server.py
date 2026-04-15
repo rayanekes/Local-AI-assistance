@@ -62,8 +62,8 @@ async def synthese_memoire_background(nouvelle_info, llm_instance):
 # CONFIGURATION MATÉRIEL
 # =========================
 
-# Le dossier des modèles lourds est désormais mutualisé avec l'ancien projet
-MODELS_DIR = "/home/rayane/projet_robot/models"
+# Le dossier des modèles lourds est mutualisé à l'extérieur du dépôt Git pour éviter la duplication
+MODELS_DIR = os.path.expanduser("~/projet_robot/models")
 INPUT_WAV = os.path.join(BASE_DIR, "input.wav")
 
 SAMPLE_RATE_MIC = 16000
@@ -117,7 +117,12 @@ if not shutil.which(PIPER_BIN):
 
 if not os.path.exists(PIPER_MODEL):
     print(f"\n❌ ERREUR CRITIQUE : Modèle de voix introuvable dans '{PIPER_MODEL}'.")
-    print("-> Veuillez placer 'fr_FR-siwis-medium.onnx' (et son .json) dans le dossier 'backend/piper/'.")
+    print("-> Veuillez placer 'fr_FR-siwis-medium.onnx' dans le dossier 'backend/piper/'.")
+    sys.exit(1)
+
+if not os.path.exists(PIPER_MODEL + ".json"):
+    print(f"\n❌ ERREUR CRITIQUE : Fichier de configuration phonétique Piper introuvable.")
+    print(f"Le fichier attendu est : '{PIPER_MODEL}.json'.")
     sys.exit(1)
 
 print("⏳ Chargement des modèles IA en parallèle...")
@@ -139,7 +144,7 @@ def load_llama():
             n_gpu_layers=-1,
             n_ctx=4096,
             verbose=False,
-            # Optimisation pour garder les poids en VRAM de manière persistante (Mmap/Mlock)
+            # Charge les poids via la mémoire virtuelle du système (Memory Mapping) pour réduire la RAM système
             use_mmap=True,
             use_mlock=False
         )

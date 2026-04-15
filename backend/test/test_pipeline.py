@@ -18,8 +18,8 @@ from llama_cpp import Llama
 # =========================
 # CONFIGURATION
 # =========================
-# Le dossier des modèles lourds est désormais mutualisé avec l'ancien projet
-MODELS_DIR = "/home/rayane/projet_robot/models"
+# Le dossier des modèles lourds est mutualisé à l'extérieur du dépôt Git pour éviter la duplication
+MODELS_DIR = os.path.expanduser("~/projet_robot/models")
 INPUT_WAV = os.path.join(BASE_DIR, "test_input.wav")
 
 SAMPLE_RATE_MIC = 16000
@@ -61,7 +61,13 @@ if not shutil.which(PIPER_BIN):
 
 if not os.path.exists(PIPER_MODEL):
     print(f"\n❌ ERREUR CRITIQUE : Modèle de voix introuvable dans '{PIPER_MODEL}'.")
-    print("-> Placez le fichier 'fr_FR-siwis-medium.onnx' (et son .json) dans le dossier 'backend/piper/'.")
+    print("-> Placez le fichier 'fr_FR-siwis-medium.onnx' dans le dossier 'backend/piper/'.")
+    sys.exit(1)
+
+if not os.path.exists(PIPER_MODEL + ".json"):
+    print(f"\n❌ ERREUR CRITIQUE : Fichier de configuration Piper introuvable !")
+    print(f"Le fichier attendu est : '{PIPER_MODEL}.json'.")
+    print("-> Chaque voix Piper (.onnx) doit OBLIGATOIREMENT être accompagnée de son fichier de configuration (.json).")
     sys.exit(1)
 
 print("⏳ Chargement des modèles IA en parallèle...")
@@ -83,7 +89,7 @@ def load_llama():
             n_gpu_layers=-1,
             n_ctx=4096,
             verbose=False,
-            # Force la création et l'usage du cache KV pour éviter le recalcul complet du contexte (latence)
+            # Charge les poids via la mémoire virtuelle du système (Memory Mapping) pour réduire la RAM système
             use_mmap=True,
             use_mlock=False
         )
