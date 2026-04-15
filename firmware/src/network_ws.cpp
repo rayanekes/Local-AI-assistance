@@ -47,22 +47,34 @@ void Network_WS::handleJsonMessage(uint8_t * payload) {
         return;
     }
 
+    // --- Gestion de l'affichage (Émotions normales) ---
     if (doc.containsKey("emotion")) {
         const char* emotion = doc["emotion"];
         char emotionToSend[32];
         strncpy(emotionToSend, emotion, sizeof(emotionToSend) - 1);
         emotionToSend[sizeof(emotionToSend) - 1] = '\0';
 
-        // Envoyer l'émotion à la tâche d'affichage
         if (emotionQueue != NULL) {
-            xQueueSend(emotionQueue, &emotionToSend, 0); // Non-bloquant
+            xQueueSend(emotionQueue, &emotionToSend, 0);
         }
     }
 
-    if (doc.containsKey("speech")) {
-        const char* speech = doc["speech"];
-        Serial.print("[Serveur IA] ");
-        Serial.println(speech);
+    // --- Gestion de la latence (Ruse de l'état "Thinking") ---
+    if (doc.containsKey("status")) {
+        const char* status = doc["status"];
+        if (strcmp(status, "thinking") == 0) {
+            // Le serveur est en train de réfléchir (latence IA)
+            char emotionToSend[32] = "reflexion";
+            if (emotionQueue != NULL) {
+                xQueueSend(emotionQueue, &emotionToSend, 0);
+            }
+        } else if (strcmp(status, "speaking") == 0) {
+            // Le serveur commence à parler (TTS)
+            char emotionToSend[32] = "parle";
+            if (emotionQueue != NULL) {
+                xQueueSend(emotionQueue, &emotionToSend, 0);
+            }
+        }
     }
 }
 

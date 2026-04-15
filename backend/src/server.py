@@ -167,10 +167,9 @@ async def handle_esp32_connection(websocket):
     silence_frames = 0
     silence_threshold = 20
 
-    async def send_json_command(cmd_type, value=None, emotion=None):
-        payload = {"type": cmd_type}
-        if value: payload["value"] = value
-        if emotion: payload["emotion"] = emotion
+    async def send_json_command(key, value):
+        # Envoie un JSON plat, ex: {"status": "thinking"} ou {"emotion": "joie"}
+        payload = {key: value}
         await websocket.send(json.dumps(payload))
 
     async def read_piper_stdout(piper_proc, websocket, state_container):
@@ -208,6 +207,7 @@ async def handle_esp32_connection(websocket):
         extractor = JSONSpeechExtractor()
         tts_buffer = ""
         full_llm_response = ""
+        emotion_sent = False
 
         piper_proc = await asyncio.create_subprocess_exec(
             PIPER_BIN, "--model", PIPER_MODEL, "--output_raw",
@@ -246,9 +246,12 @@ async def handle_esp32_connection(websocket):
                 token = delta["content"]
                 full_llm_response += token
 
-                emotion_match = re.search(r'"emotion"\s*:\s*"([^"]+)"', full_llm_response)
-                if emotion_match:
-                    await send_json_command("emotion", emotion_match.group(1))
+                # N'envoyer l'émotion qu'une seule fois par réponse
+                if not emotion_sent:
+                    emotion_match = re.search(r'"emotion"\s*:\s*"([^"]+)"', full_llm_response)
+                    if emotion_match:
+                        await send_json_command("emotion", emotion_match.group(1))
+                        emotion_sent = True
 
                 speech_part = extractor.extract_chunk(token)
                 if speech_part:

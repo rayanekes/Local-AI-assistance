@@ -39,7 +39,8 @@
         "display_tft: Gère le TFT et la carte SD (via TFT_eSPI). Dessine des BMP 24-bits."
       ],
       "ipc_safety": "Passage des buffers audio et JSON via FreeRTOS Queues (xQueueCreate, xQueueSend) avec allocation dynamique (malloc/free) pour éviter les fuites et corruptions.",
-      "animations": "Tâche asynchrone basée sur xQueueReceive timeouts pour alterner les images BMP sur la carte SD (simule des clignements)."
+      "animations": "Tâche asynchrone basée sur xQueueReceive timeouts pour alterner les images BMP sur la carte SD (simule des clignements).",
+      "latency_masking": "Lors de la réception du JSON `{\"status\": \"thinking\"}`, l'ESP32 déclenche automatiquement l'animation `reflexion` pour occuper visuellement l'utilisateur pendant que le GPU LLaMA calcule la réponse."
     }
   },
 

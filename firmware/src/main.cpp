@@ -43,8 +43,8 @@ void displayTask(void *pvParameters) {
   display.displayEmotion(currentEmotion, currentFrame);
 
   for (;;) {
-    // On attend une nouvelle émotion, avec un timeout de 1 seconde pour gérer l'animation
-    if (xQueueReceive(emotionQueue, &receivedEmotion, 1000 / portTICK_PERIOD_MS) == pdPASS) {
+    // Timeout court (50ms) pour vérifier fréquemment si c'est le moment d'animer l'écran
+    if (xQueueReceive(emotionQueue, &receivedEmotion, 50 / portTICK_PERIOD_MS) == pdPASS) {
       String newEmotion = String(receivedEmotion);
       if (newEmotion != currentEmotion) {
         Serial.print("[Display] Nouvelle émotion: ");
