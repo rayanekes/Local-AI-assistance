@@ -100,6 +100,19 @@ conversation_history = [{"role": "system", "content": SYSTEM_PROMPT}]
 # INITIALISATION ML
 # =========================
 
+import sys
+
+# Vérification de l'existence des modèles lourds (non inclus dans git)
+if not os.path.exists(LLM_MODEL_PATH):
+    print(f"\n❌ ERREUR CRITIQUE : Modèle IA (GGUF) introuvable dans '{LLM_MODEL_PATH}'.")
+    print("Veuillez copier le modèle depuis votre environnement précédent vers le dossier 'backend/models/'.")
+    sys.exit(1)
+
+if not os.path.exists(PIPER_BIN) or not os.path.exists(PIPER_MODEL):
+    print(f"\n❌ ERREUR CRITIQUE : Exécutable ou modèle Piper introuvable dans '{os.path.dirname(PIPER_BIN)}'.")
+    print("Veuillez copier Piper depuis votre environnement précédent.")
+    sys.exit(1)
+
 try:
     whisper = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type="float16")
 except Exception as e:
@@ -107,12 +120,16 @@ except Exception as e:
 
 vad_model = load_silero_vad()
 
-llm = Llama(
-    model_path=LLM_MODEL_PATH,
-    n_gpu_layers=-1,
-    n_ctx=4096,
-    verbose=False
-)
+try:
+    llm = Llama(
+        model_path=LLM_MODEL_PATH,
+        n_gpu_layers=-1,
+        n_ctx=4096,
+        verbose=False
+    )
+except Exception as e:
+    print(f"\n❌ Erreur de chargement de Llama.cpp : {e}")
+    sys.exit(1)
 
 # =========================
 # OUTILS

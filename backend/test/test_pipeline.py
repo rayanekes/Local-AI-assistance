@@ -52,13 +52,27 @@ except Exception as e:
     whisper = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
     print("⚠️ Whisper chargé (CPU - Erreur GPU)")
 
-llm = Llama(
-    model_path=LLM_MODEL_PATH,
-    n_gpu_layers=-1,
-    n_ctx=4096,
-    verbose=False
-)
-print("✅ LLaMA chargé (GPU)")
+if not os.path.exists(LLM_MODEL_PATH):
+    print(f"\n❌ ERREUR CRITIQUE : Modèle IA introuvable !")
+    print(f"Le fichier attendu est : {LLM_MODEL_PATH}")
+    print("-> Les modèles (plusieurs Go) ne sont pas sur GitHub.")
+    print("-> Veuillez copier votre fichier 'qwen2.5-3b-instruct-q5_k_m.gguf' dans le dossier 'backend/models/'.")
+    sys.exit(1)
+
+try:
+    llm = Llama(
+        model_path=LLM_MODEL_PATH,
+        n_gpu_layers=-1,
+        n_ctx=4096,
+        verbose=False
+    )
+    print("✅ LLaMA chargé (GPU)")
+except Exception as e:
+    print(f"\n❌ Erreur lors du chargement de LLaMA : {e}")
+    sys.exit(1)
+
+if not os.path.exists(PIPER_BIN) or not os.path.exists(PIPER_MODEL):
+    print("\n⚠️ ATTENTION : L'exécutable Piper ou le modèle vocal (.onnx) est manquant dans 'backend/piper/'. Le TTS échouera.")
 
 # =========================
 # FONCTIONS DU PIPELINE
