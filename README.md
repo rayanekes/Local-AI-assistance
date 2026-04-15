@@ -31,6 +31,7 @@ Pour que les outils de test audio (comme le simulateur PC ou la capture micro) f
 ```bash
 sudo apt-get update
 sudo apt-get install portaudio19-dev
+sudo apt-get install libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev
 ```
 
 Ensuite, installez toutes les dépendances Python :
@@ -45,7 +46,7 @@ Pour des raisons de taille de fichiers, les modèles d'Intelligence Artificielle
 1. **Modèle LLM (Llama.cpp) :**
    - Placez `qwen2.5-3b-instruct-q5_k_m.gguf` dans le dossier `backend/models/`.
 2. **Exécutable et Modèle TTS (Piper) :**
-   - Placez l'exécutable `piper` et le fichier de voix `fr_FR-siwis-medium.onnx` dans le dossier `backend/piper/`.
+   - Placez l'exécutable `piper` (Téléchargement: [piper_linux_x86_64.tar.gz](https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_linux_x86_64.tar.gz)) et le fichier de voix `.onnx` dans le dossier `backend/piper/`.
 
 ### Exécution du Serveur Principal
 ```bash

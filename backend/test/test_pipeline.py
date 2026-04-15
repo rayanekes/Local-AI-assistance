@@ -72,7 +72,12 @@ except Exception as e:
     sys.exit(1)
 
 if not os.path.exists(PIPER_BIN) or not os.path.exists(PIPER_MODEL):
-    print("\n⚠️ ATTENTION : L'exécutable Piper ou le modèle vocal (.onnx) est manquant dans 'backend/piper/'. Le TTS échouera.")
+    print("\n❌ ERREUR CRITIQUE : Exécutable Piper manquant !")
+    print("Le TTS (Text-to-Speech) ne peut pas fonctionner sans lui.")
+    print("-> 1. Téléchargez la version Linux amd64 : https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_linux_x86_64.tar.gz")
+    print("-> 2. Extrayez le fichier 'piper' dans le dossier 'backend/piper/'")
+    print("-> 3. Téléchargez la voix '.onnx' correspondante et placez-la aussi dans ce dossier.")
+    sys.exit(1)
 
 # =========================
 # FONCTIONS DU PIPELINE
