@@ -30,19 +30,39 @@ String currentEmotion = "";
 // ==========================================
 
 // --- Tâche : Affichage TFT (Core 1) ---
-// L'écran SPI est géré ici pour ne pas bloquer les autres processus
+// Gère l'affichage asynchrone et les animations (clignements)
 void displayTask(void *pvParameters) {
   display.init();
 
   char receivedEmotion[32];
+  int currentFrame = 1;
+  unsigned long lastAnimTime = 0;
+
+  // Par défaut, l'émotion de démarrage
+  currentEmotion = "neutre";
+  display.displayEmotion(currentEmotion, currentFrame);
+
   for (;;) {
-    if (xQueueReceive(emotionQueue, &receivedEmotion, portMAX_DELAY) == pdPASS) {
+    // On attend une nouvelle émotion, avec un timeout de 1 seconde pour gérer l'animation
+    if (xQueueReceive(emotionQueue, &receivedEmotion, 1000 / portTICK_PERIOD_MS) == pdPASS) {
       String newEmotion = String(receivedEmotion);
       if (newEmotion != currentEmotion) {
         Serial.print("[Display] Nouvelle émotion: ");
         Serial.println(newEmotion);
-        display.displayEmotion(newEmotion);
         currentEmotion = newEmotion;
+        currentFrame = 1; // Toujours commencer par la frame 1
+        display.displayEmotion(currentEmotion, currentFrame);
+        lastAnimTime = millis();
+      }
+    } else {
+      // Si aucune nouvelle émotion n'est reçue, on gère l'animation de l'émotion actuelle
+      unsigned long animDelay = (currentFrame == 1) ? 2000 : 300; // Yeux ouverts 2s, fermés 0.3s
+
+      if (millis() - lastAnimTime > animDelay) {
+        // Alterne la frame
+        currentFrame = (currentFrame == 1) ? 2 : 1;
+        display.displayEmotion(currentEmotion, currentFrame);
+        lastAnimTime = millis();
       }
     }
   }

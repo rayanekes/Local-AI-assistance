@@ -22,8 +22,9 @@ void TFT_Display::init() {
   }
 }
 
-void TFT_Display::displayEmotion(String emotion) {
-  String bmpPath = "/" + emotion + ".bmp";
+void TFT_Display::displayEmotion(String emotion, int frame) {
+  // Construit le chemin avec le numéro de frame (ex: "/joie_1.bmp")
+  String bmpPath = "/" + emotion + "_" + String(frame) + ".bmp";
   tft.fillScreen(TFT_BLACK); // Nettoyer l'écran avant d'afficher
   drawBmp(bmpPath.c_str(), 0, 0);
 }

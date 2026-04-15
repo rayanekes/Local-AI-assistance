@@ -12,7 +12,7 @@ class TFT_Display {
 public:
     TFT_Display();
     void init();
-    void displayEmotion(String emotion);
+    void displayEmotion(String emotion, int frame);
 
 private:
     TFT_eSPI tft;
