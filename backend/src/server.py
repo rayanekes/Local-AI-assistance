@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import threading
 import websockets
 import re
 import numpy as np
@@ -230,15 +231,30 @@ async def handle_esp32_connection(websocket):
         # Wrapping the standard stream generator execution in a thread pool to unblock Asyncio event loop
         stream_generator = await asyncio.to_thread(generate_llm_stream)
 
+        token_queue = asyncio.Queue(maxsize=100)
+        loop = asyncio.get_running_loop()
+
+        def producer():
+            try:
+                for chunk in stream_generator:
+                    if interrupt_flag:
+                        break
+                    asyncio.run_coroutine_threadsafe(token_queue.put(chunk), loop).result()
+            except Exception:
+                pass
+            finally:
+                asyncio.run_coroutine_threadsafe(token_queue.put(None), loop)
+
+        threading.Thread(target=producer, daemon=True).start()
+
         while True:
+            chunk = await token_queue.get()
+
             if interrupt_flag:
                 state_container["interrupt"] = True
                 break
 
-            try:
-                # Yield next token from generator in thread to prevent blocking
-                chunk = await asyncio.to_thread(next, stream_generator)
-            except StopIteration:
+            if chunk is None:
                 break
 
             delta = chunk["choices"][0].get("delta", {})
