@@ -15,10 +15,11 @@
     },
     {
       "name": "Vérification de l'exécutable TTS (Piper)",
-      "type": "file_executable",
-      "path": "backend/piper/piper",
+      "type": "shell_command",
+      "command": "which piper",
+      "expected_output_contains": "piper",
       "critical": true,
-      "resolution_if_missing": "Exécuter: wget https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_linux_x86_64.tar.gz && tar -xzf piper_linux_x86_64.tar.gz -C backend/piper/ --strip-components=1 piper/piper"
+      "resolution_if_missing": "L'exécutable système piper n'est pas dans le PATH. Exécuter: pip install piper-tts"
     },
     {
       "name": "Vérification du Modèle Vocal TTS (Piper ONNX)",

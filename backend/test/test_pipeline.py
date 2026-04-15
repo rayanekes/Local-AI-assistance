@@ -29,7 +29,9 @@ LLM_MODEL_PATH = os.path.join(MODELS_DIR, "qwen2.5-3b-instruct-q5_k_m.gguf")
 WHISPER_MODEL = "small"
 WHISPER_DEVICE = "cuda"
 
-PIPER_BIN = os.path.join(BASE_DIR, "piper", "piper")
+import shutil
+
+PIPER_BIN = "piper" # Utilise la commande installée via pip (piper-tts)
 PIPER_MODEL = os.path.join(BASE_DIR, "piper", "fr_FR-siwis-medium.onnx")
 
 SYSTEM_PROMPT = (
@@ -52,9 +54,14 @@ if not os.path.exists(LLM_MODEL_PATH):
     print(f"Le fichier attendu est : {LLM_MODEL_PATH}")
     sys.exit(1)
 
-if not os.path.exists(PIPER_BIN) or not os.path.exists(PIPER_MODEL):
-    print("\n❌ ERREUR CRITIQUE : Exécutable Piper manquant !")
-    print("-> 1. Téléchargez : https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_linux_x86_64.tar.gz")
+if not shutil.which(PIPER_BIN):
+    print("\n❌ ERREUR CRITIQUE : La commande système 'piper' est introuvable !")
+    print("-> Exécutez : pip install piper-tts")
+    sys.exit(1)
+
+if not os.path.exists(PIPER_MODEL):
+    print(f"\n❌ ERREUR CRITIQUE : Modèle de voix introuvable dans '{PIPER_MODEL}'.")
+    print("-> Placez le fichier 'fr_FR-siwis-medium.onnx' (et son .json) dans le dossier 'backend/piper/'.")
     sys.exit(1)
 
 print("⏳ Chargement des modèles IA en parallèle...")

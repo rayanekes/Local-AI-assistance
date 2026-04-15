@@ -74,7 +74,9 @@ LLM_MODEL_PATH = os.path.join(MODELS_DIR, "qwen2.5-3b-instruct-q5_k_m.gguf")
 WHISPER_MODEL = "small"
 WHISPER_DEVICE = "cuda"
 
-PIPER_BIN = os.path.join(BASE_DIR, "piper", "piper")
+import shutil
+
+PIPER_BIN = "piper" # Utilise la commande pip globale (piper-tts)
 PIPER_MODEL = os.path.join(BASE_DIR, "piper", "fr_FR-siwis-medium.onnx")
 
 memoire_dynamique = charger_memoire()
@@ -108,8 +110,14 @@ if not os.path.exists(LLM_MODEL_PATH):
     print(f"\n❌ ERREUR CRITIQUE : Modèle IA (GGUF) introuvable dans '{LLM_MODEL_PATH}'.")
     sys.exit(1)
 
-if not os.path.exists(PIPER_BIN) or not os.path.exists(PIPER_MODEL):
-    print(f"\n❌ ERREUR CRITIQUE : Exécutable ou modèle Piper introuvable dans '{os.path.dirname(PIPER_BIN)}'.")
+if not shutil.which(PIPER_BIN):
+    print("\n❌ ERREUR CRITIQUE : Exécutable système 'piper' introuvable.")
+    print("-> Assurez-vous d'avoir exécuté : pip install piper-tts")
+    sys.exit(1)
+
+if not os.path.exists(PIPER_MODEL):
+    print(f"\n❌ ERREUR CRITIQUE : Modèle de voix introuvable dans '{PIPER_MODEL}'.")
+    print("-> Veuillez placer 'fr_FR-siwis-medium.onnx' (et son .json) dans le dossier 'backend/piper/'.")
     sys.exit(1)
 
 print("⏳ Chargement des modèles IA en parallèle...")
