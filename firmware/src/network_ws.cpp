@@ -74,6 +74,12 @@ void Network_WS::handleJsonMessage(uint8_t * payload) {
             if (emotionQueue != NULL) {
                 xQueueSend(emotionQueue, &emotionToSend, 0);
             }
+        } else if (strcmp(status, "idle") == 0) {
+            // Le serveur a fini de parler
+            char emotionToSend[32] = "idle";
+            if (emotionQueue != NULL) {
+                xQueueSend(emotionQueue, &emotionToSend, 0);
+            }
         }
     }
 }

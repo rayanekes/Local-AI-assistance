@@ -22,8 +22,9 @@ QueueHandle_t emotionQueue;
 QueueHandle_t audioTxQueue; // Serveur -> ESP32 (Haut-parleur)
 QueueHandle_t audioRxQueue; // ESP32 (Micro) -> Serveur
 
-// Variable globale pour stocker l'émotion affichée
+// Variables globales pour stocker l'état visuel
 String currentEmotion = "";
+bool isSpeaking = false;
 
 // ==========================================
 // TÂCHES FREERTOS
@@ -43,25 +44,42 @@ void displayTask(void *pvParameters) {
   display.displayEmotion(currentEmotion, currentFrame);
 
   for (;;) {
-    // Timeout court (50ms) pour vérifier fréquemment si c'est le moment d'animer l'écran
+    // Timeout court (50ms)
     if (xQueueReceive(emotionQueue, &receivedEmotion, 50 / portTICK_PERIOD_MS) == pdPASS) {
       String newEmotion = String(receivedEmotion);
-      if (newEmotion != currentEmotion) {
-        Serial.print("[Display] Nouvelle émotion: ");
-        Serial.println(newEmotion);
-        currentEmotion = newEmotion;
-        currentFrame = 1; // Toujours commencer par la frame 1
+
+      if (newEmotion == "parle") {
+        isSpeaking = true;
+      } else if (newEmotion == "idle") {
+        isSpeaking = false;
+        // Restaurer l'émotion actuelle
         display.displayEmotion(currentEmotion, currentFrame);
-        lastAnimTime = millis();
+      } else {
+        currentEmotion = newEmotion;
       }
+
+      // Toujours commencer par la frame 1 lors d'un changement
+      currentFrame = 1;
+      lastAnimTime = millis();
+
+      String emotionToDisplay = isSpeaking ? "parle" : currentEmotion;
+      display.displayEmotion(emotionToDisplay, currentFrame);
+
     } else {
-      // Si aucune nouvelle émotion n'est reçue, on gère l'animation de l'émotion actuelle
-      unsigned long animDelay = (currentFrame == 1) ? 2000 : 300; // Yeux ouverts 2s, fermés 0.3s
+      // Gestion de l'animation de l'émotion en cours
+      String emotionToDisplay = isSpeaking ? "parle" : currentEmotion;
+
+      // La bouche s'anime beaucoup plus vite (200ms) que les yeux (2000ms/300ms)
+      unsigned long animDelay;
+      if (isSpeaking) {
+        animDelay = 200;
+      } else {
+        animDelay = (currentFrame == 1) ? 2000 : 300;
+      }
 
       if (millis() - lastAnimTime > animDelay) {
-        // Alterne la frame
         currentFrame = (currentFrame == 1) ? 2 : 1;
-        display.displayEmotion(currentEmotion, currentFrame);
+        display.displayEmotion(emotionToDisplay, currentFrame);
         lastAnimTime = millis();
       }
     }

@@ -178,10 +178,18 @@ async def handle_esp32_connection(websocket):
                 if state_container["interrupt"]:
                     piper_proc.terminate()
                     break
+                # On lit des blocs de 4096 octets (2048 samples en 16-bit)
                 audio_out = await piper_proc.stdout.read(4096)
                 if not audio_out:
                     break
                 await websocket.send(audio_out)
+
+                # --- Pacing Audio ---
+                # 4096 octets / 2 (car 16 bits = 2 octets) = 2048 samples
+                # 2048 samples à 22050 Hz représentent environ 0.092 secondes d'audio.
+                # On demande à Python d'attendre un peu avant d'envoyer le paquet suivant,
+                # sinon il sature la petite file d'attente (Queue) FreeRTOS de l'ESP32, ce qui cause des saccades.
+                await asyncio.sleep(0.08) # Légèrement inférieur à 0.092 pour garder un petit buffer d'avance
         except Exception:
             pass
 
@@ -294,14 +302,24 @@ async def handle_esp32_connection(websocket):
                 timestamps = await asyncio.to_thread(get_speech_timestamps, audio_tensor, vad_model, sampling_rate=SAMPLE_RATE_MIC)
                 voice_detected = len(timestamps) > 0
 
+                # Calcul de l'énergie (RMS) pour l'AEC heuristique
+                rms = np.sqrt(np.mean(audio_tensor.numpy()**2))
+
                 if not is_speaking:
                     pre_roll.append(chunk)
                     if voice_detected:
+                        # Si le robot parle, on exige un volume (RMS) beaucoup plus fort pour déclencher le Barge-in
+                        # Cela évite que l'écho de son propre haut-parleur ne l'interrompe (AEC logiciel basique)
+                        barge_in_threshold = 0.05  # À ajuster empiriquement
+                        if robot_is_answering and rms < barge_in_threshold:
+                            continue # C'est sûrement de l'écho, on ignore
+
                         is_speaking = True
                         audio_buffer.extend(list(pre_roll))
                         pre_roll.clear()
                         silence_frames = 0
 
+                        # Déclencher l'interruption
                         if robot_is_answering:
                             interrupt_flag = True
                 else:
@@ -312,10 +330,6 @@ async def handle_esp32_connection(websocket):
                         silence_frames += 1
                         if silence_frames > silence_threshold:
                             is_speaking = False
-
-                            if interrupt_flag:
-                                audio_buffer = []
-                                continue
 
                             audio_data = np.concatenate(audio_buffer)
                             await asyncio.to_thread(wav.write, INPUT_WAV, SAMPLE_RATE_MIC, audio_data)

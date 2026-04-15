@@ -61,22 +61,34 @@ void TFT_Display::drawBmp(const char *filename, int16_t x, int16_t y) {
       bmpFS.seek(seekOffset);
 
       uint16_t padding = (4 - ((w * 3) & 3)) & 3;
-      // Utilisation de malloc plutôt qu'un VLA pour éviter de surcharger la stack FreeRTOS
-      uint8_t* lineBuffer = (uint8_t*)malloc(w * 3 + padding);
 
-      if (lineBuffer != NULL) {
+      // Allocation du buffer de lecture (SD) et du buffer de couleurs (TFT)
+      uint8_t* lineBuffer = (uint8_t*)malloc(w * 3 + padding);
+      uint16_t* colorBuffer = (uint16_t*)malloc(w * sizeof(uint16_t));
+
+      if (lineBuffer != NULL && colorBuffer != NULL) {
+        // Définir la zone de dessin pour utiliser pushColors (optimisation DMA/SPI)
+        tft.setWindow(x, y, x + w - 1, y + h - 1);
+
         for (row = 0; row < h; row++) {
           bmpFS.read(lineBuffer, w * 3 + padding);
           uint8_t* bptr = lineBuffer;
+
           for (col = 0; col < w; col++) {
             b = *bptr++;
             g = *bptr++;
             r = *bptr++;
-            tft.drawPixel(x + col, y + h - 1 - row, tft.color565(r, g, b));
+            colorBuffer[col] = tft.color565(r, g, b);
           }
+          // Pousser la ligne complète vers l'écran de bas en haut (format BMP)
+          // Note : TFT_eSPI n'a pas de pushColors inversé pour Y, on utilise pushImage par ligne
+          tft.pushImage(x, y + h - 1 - row, w, 1, colorBuffer);
         }
         free(lineBuffer);
+        free(colorBuffer);
       } else {
+        if (lineBuffer) free(lineBuffer);
+        if (colorBuffer) free(colorBuffer);
         Serial.println("Erreur d'allocation mémoire pour le buffer BMP");
       }
     } else {
