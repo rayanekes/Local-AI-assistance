@@ -138,7 +138,10 @@ def load_llama():
             model_path=LLM_MODEL_PATH,
             n_gpu_layers=-1,
             n_ctx=4096,
-            verbose=False
+            verbose=False,
+            # Optimisation pour garder les poids en VRAM de manière persistante (Mmap/Mlock)
+            use_mmap=True,
+            use_mlock=False
         )
         print("✅ LLaMA chargé (GPU)")
         return model

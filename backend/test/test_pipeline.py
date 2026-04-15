@@ -82,7 +82,10 @@ def load_llama():
             model_path=LLM_MODEL_PATH,
             n_gpu_layers=-1,
             n_ctx=4096,
-            verbose=False
+            verbose=False,
+            # Force la création et l'usage du cache KV pour éviter le recalcul complet du contexte (latence)
+            use_mmap=True,
+            use_mlock=False
         )
         print("✅ LLaMA chargé (GPU)")
         return model
@@ -167,7 +170,7 @@ async def run_tts(speech_text):
     print("🗣️ [4/4] SYNTHÈSE VOCALE (Piper)...")
     piper_proc = await asyncio.create_subprocess_exec(
         PIPER_BIN, "--model", PIPER_MODEL, "--output_raw",
-        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
 
     piper_proc.stdin.write(speech_text.encode("utf-8"))
@@ -184,7 +187,11 @@ async def run_tts(speech_text):
             audio_data = np.frombuffer(audio_out, dtype=np.int16)
             stream.write(audio_data)
 
-    await piper_proc.wait()
+    # Récupérer et afficher l'erreur si Piper plante silencieusement
+    _, stderr_data = await piper_proc.communicate()
+    if piper_proc.returncode != 0:
+        print(f"❌ Erreur Piper (Code {piper_proc.returncode}):\n{stderr_data.decode('utf-8')}")
+
     print("✅ Cycle terminé.\n" + "="*50)
 
 async def main():
