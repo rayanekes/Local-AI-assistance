@@ -16,8 +16,9 @@
 #define I2S_SPK_BCLK 27
 #define I2S_SPK_DIN  22
 
-// Fréquence d'échantillonnage (16kHz mono pour le STT Whisper)
-#define SAMPLE_RATE 16000
+// Fréquence d'échantillonnage
+#define SAMPLE_RATE_MIC 16000 // STT Whisper
+#define SAMPLE_RATE_SPK 22050 // TTS Piper
 
 class Audio_I2S {
 public:

@@ -3,7 +3,7 @@
 void Audio_I2S::initMic() {
     i2s_config_t i2s_mic_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
-        .sample_rate = SAMPLE_RATE,
+        .sample_rate = SAMPLE_RATE_MIC,
         .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
         .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
         .communication_format = i2s_comm_format_t(I2S_COMM_FORMAT_STAND_I2S),
@@ -30,7 +30,7 @@ void Audio_I2S::initMic() {
 void Audio_I2S::initSpeaker() {
     i2s_config_t i2s_spk_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-        .sample_rate = SAMPLE_RATE, // Souvent 22050 pour Piper, mais configurable
+        .sample_rate = SAMPLE_RATE_SPK,
         .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
         .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
         .communication_format = i2s_comm_format_t(I2S_COMM_FORMAT_STAND_I2S),
