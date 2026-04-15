@@ -1,4 +1,4 @@
-#include "TFT_Display.h"
+#include "display_tft.h"
 
 TFT_Display::TFT_Display() : tft(TFT_eSPI()) {}
 

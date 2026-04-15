@@ -1,33 +1,46 @@
-// main.cpp - Point d'entrée pour l'ESP32
+// main.cpp - Hub Central et Orchestrateur FreeRTOS
 
 #include <Arduino.h>
-#include <ArduinoJson.h>
-#include "TFT_Display.h"
+#include "display_tft.h"
+#include "audio_i2s.h"
+#include "network_ws.h"
+#include "audio_chunk.h"
 
-// Instance de l'écran TFT
+// --- Configuration Wi-Fi et Serveur ---
+const char* ssid = "VOTRE_SSID";
+const char* password = "VOTRE_PASSWORD";
+const char* ws_server_ip = "192.168.x.x"; // IP de votre PC Pop!_OS
+const uint16_t ws_server_port = 8765;
+
+// --- Instances des Modules ---
 TFT_Display display;
+Audio_I2S audio;
+Network_WS network;
 
-// File d'attente (Queue) FreeRTOS pour communiquer les émotions entre les cœurs
+// --- Files d'attente (Queues) FreeRTOS (IPC) ---
 QueueHandle_t emotionQueue;
+QueueHandle_t audioTxQueue; // Serveur -> ESP32 (Haut-parleur)
+QueueHandle_t audioRxQueue; // ESP32 (Micro) -> Serveur
 
-// Variable globale pour stocker l'émotion actuelle et éviter les rafraîchissements inutiles
+// Variable globale pour stocker l'émotion affichée
 String currentEmotion = "";
 
-// Tâche FreeRTOS exécutée sur le Core 0 pour gérer exclusivement l'écran
+// ==========================================
+// TÂCHES FREERTOS
+// ==========================================
+
+// --- Tâche : Affichage TFT (Core 1) ---
+// L'écran SPI est géré ici pour ne pas bloquer les autres processus
 void displayTask(void *pvParameters) {
   display.init();
 
   char receivedEmotion[32];
-
   for (;;) {
-    // On attend indéfiniment jusqu'à recevoir une nouvelle émotion dans la queue
     if (xQueueReceive(emotionQueue, &receivedEmotion, portMAX_DELAY) == pdPASS) {
       String newEmotion = String(receivedEmotion);
-
       if (newEmotion != currentEmotion) {
-        Serial.print("[Core 0] Affichage de la nouvelle émotion: ");
+        Serial.print("[Display] Nouvelle émotion: ");
         Serial.println(newEmotion);
-
         display.displayEmotion(newEmotion);
         currentEmotion = newEmotion;
       }
@@ -35,85 +48,107 @@ void displayTask(void *pvParameters) {
   }
 }
 
-// Fonction appelée par la boucle principale (Core 1) lors de la réception d'un JSON
-void parseAndHandleJSON(String jsonString) {
-  StaticJsonDocument<512> doc;
-  DeserializationError error = deserializeJson(doc, jsonString);
+// --- Tâche : Réseau Wi-Fi & WebSocket (Core 0) ---
+// Gère la connexion et l'envoi thread-safe des flux montants
+void networkTask(void *pvParameters) {
+  network.initWiFi(ssid, password);
+  network.initWebSocket(ws_server_ip, ws_server_port);
 
-  if (error) {
-    Serial.print("Erreur de parsing JSON: ");
-    Serial.println(error.c_str());
-    return;
-  }
+  AudioChunk rxChunk;
 
-  // Si le JSON contient une émotion, on l'envoie à la tâche d'affichage via la Queue
-  if (doc.containsKey("emotion")) {
-    const char* emotion = doc["emotion"];
-    char emotionToSend[32];
-    strncpy(emotionToSend, emotion, sizeof(emotionToSend) - 1);
-    emotionToSend[sizeof(emotionToSend) - 1] = '\0';
+  for (;;) {
+    network.loop();
 
-    // Envoyer l'émotion dans la file d'attente
-    xQueueSend(emotionQueue, &emotionToSend, portMAX_DELAY);
-  }
+    // Vérifier si la tâche micro a envoyé de l'audio à transmettre
+    if (xQueueReceive(audioRxQueue, &rxChunk, 0) == pdPASS) {
+      if (rxChunk.data != NULL) {
+        network.sendAudio(rxChunk.data, rxChunk.length);
+        free(rxChunk.data); // Libérer la mémoire allouée par micTask
+      }
+    }
 
-  if (doc.containsKey("speech")) {
-    const char* speech = doc["speech"];
-    Serial.print("[Core 1] Speech généré: ");
-    Serial.println(speech);
+    vTaskDelay(10 / portTICK_PERIOD_MS);
   }
 }
+
+// --- Tâche : Audio Micro INMP441 -> Serveur (Core 1) ---
+void micTask(void *pvParameters) {
+  audio.initMic();
+
+  const size_t bufferSize = 1024;
+
+  for (;;) {
+    // On alloue un buffer pour chaque lecture
+    int16_t* micBuffer = (int16_t*)malloc(bufferSize);
+
+    if (micBuffer != NULL) {
+      size_t bytesRead = audio.readMic(micBuffer, bufferSize);
+
+      if (bytesRead > 0) {
+        AudioChunk chunk;
+        chunk.data = (uint8_t*)micBuffer;
+        chunk.length = bytesRead;
+
+        // Envoyer à networkTask de manière sécurisée
+        if (xQueueSend(audioRxQueue, &chunk, 0) != pdPASS) {
+          free(micBuffer); // Queue pleine = on drop le paquet
+        }
+      } else {
+        free(micBuffer);
+      }
+    }
+    vTaskDelay(1 / portTICK_PERIOD_MS);
+  }
+}
+
+// --- Tâche : Serveur -> Haut-Parleur MAX98357A (Core 1) ---
+void speakerTask(void *pvParameters) {
+  audio.initSpeaker();
+
+  AudioChunk txChunk;
+
+  for (;;) {
+    // Attendre qu'un paquet audio arrive depuis le réseau
+    if (xQueueReceive(audioTxQueue, &txChunk, portMAX_DELAY) == pdPASS) {
+      if (txChunk.data != NULL) {
+        // Écrire la taille exacte reçue du serveur
+        audio.writeSpeaker(txChunk.data, txChunk.length);
+        free(txChunk.data);
+      }
+    }
+  }
+}
+
+// ==========================================
+// SETUP & LOOP (Hub Central)
+// ==========================================
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("Démarrage du robot...");
+  Serial.println("\n--- Démarrage du Client ESP32 Robot IA ---");
 
-  // Création de la file d'attente (jusqu'à 5 émotions de 32 caractères max)
+  // Initialisation des Files d'Attente (IPC)
   emotionQueue = xQueueCreate(5, sizeof(char[32]));
+  audioTxQueue = xQueueCreate(10, sizeof(AudioChunk));
+  audioRxQueue = xQueueCreate(10, sizeof(AudioChunk));
 
-  if (emotionQueue == NULL) {
-    Serial.println("Erreur: Impossible de créer la file d'attente FreeRTOS.");
-    while (1); // Bloquer l'exécution en cas d'erreur critique
+  if (emotionQueue == NULL || audioTxQueue == NULL || audioRxQueue == NULL) {
+    Serial.println("Erreur critique: Création des Queues FreeRTOS échouée.");
+    while (1);
   }
 
-  // Création de la tâche dédiée à l'écran sur le Core 0
-  xTaskCreatePinnedToCore(
-    displayTask,    /* Fonction de la tâche */
-    "DisplayTask",  /* Nom de la tâche */
-    4096,           /* Taille de la pile (Stack size) en mots (words) */
-    NULL,           /* Paramètres */
-    1,              /* Priorité de la tâche (1 = basse) */
-    NULL,           /* Handle de la tâche */
-    0               /* Core 0 (0 pour l'écran, 1 pour l'I2S/Wi-Fi) */
-  );
+  // Lancement de la tâche Réseau sur le Core 0
+  xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
 
-  Serial.println("Initialisation FreeRTOS terminée.");
+  // Lancement des tâches Matérielles sur le Core 1
+  xTaskCreatePinnedToCore(displayTask, "DisplayTask", 4096, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(micTask, "MicTask", 4096, NULL, 2, NULL, 1);
+  xTaskCreatePinnedToCore(speakerTask, "SpeakerTask", 4096, NULL, 3, NULL, 1); // Plus haute priorité pour l'audio
+
+  Serial.println("Toutes les tâches FreeRTOS sont lancées !");
 }
 
 void loop() {
-  // --- Simulation de réception JSON ---
-  // Le Core 1 gérera ici la réception WebSocket et l'audio I2S.
-  // Pour l'instant, on simule l'arrivée d'un JSON toutes les 5 secondes.
-
-  static unsigned long lastUpdate = 0;
-  static int state = 0;
-
-  if (millis() - lastUpdate > 5000) {
-    lastUpdate = millis();
-    String fakeJson = "";
-
-    if (state == 0) {
-      fakeJson = "{\"speech\": \"Bonjour je suis content.\", \"emotion\": \"joie\"}";
-      state = 1;
-    } else if (state == 1) {
-      fakeJson = "{\"speech\": \"Je suis en attente.\", \"emotion\": \"neutre\"}";
-      state = 2;
-    } else {
-      fakeJson = "{\"speech\": \"Oh non c'est dommage.\", \"emotion\": \"triste\"}";
-      state = 0;
-    }
-
-    Serial.println("\n[Core 1] Simulation réception WebSocket...");
-    parseAndHandleJSON(fakeJson);
-  }
+  // Le main.cpp est désormais vide, FreeRTOS gère tout via ses tâches.
+  vTaskDelete(NULL); // Détruit la tâche loop() par défaut pour économiser de la RAM
 }
