@@ -18,7 +18,8 @@ from llama_cpp import Llama
 # =========================
 # CONFIGURATION
 # =========================
-MODELS_DIR = os.path.join(BASE_DIR, "models")
+# Le dossier des modèles lourds est désormais mutualisé avec l'ancien projet
+MODELS_DIR = "/home/rayane/projet_robot/models"
 INPUT_WAV = os.path.join(BASE_DIR, "test_input.wav")
 
 SAMPLE_RATE_MIC = 16000
@@ -42,42 +43,53 @@ SYSTEM_PROMPT = (
 )
 
 # =========================
-# INITIALISATION ML
+# INITIALISATION ML PARALLÈLE
 # =========================
-print("⏳ Chargement des modèles IA...")
-try:
-    whisper = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type="float16")
-    print("✅ Whisper chargé (GPU)")
-except Exception as e:
-    whisper = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
-    print("⚠️ Whisper chargé (CPU - Erreur GPU)")
+import concurrent.futures
 
 if not os.path.exists(LLM_MODEL_PATH):
     print(f"\n❌ ERREUR CRITIQUE : Modèle IA introuvable !")
     print(f"Le fichier attendu est : {LLM_MODEL_PATH}")
-    print("-> Les modèles (plusieurs Go) ne sont pas sur GitHub.")
-    print("-> Veuillez copier votre fichier 'qwen2.5-3b-instruct-q5_k_m.gguf' dans le dossier 'backend/models/'.")
-    sys.exit(1)
-
-try:
-    llm = Llama(
-        model_path=LLM_MODEL_PATH,
-        n_gpu_layers=-1,
-        n_ctx=4096,
-        verbose=False
-    )
-    print("✅ LLaMA chargé (GPU)")
-except Exception as e:
-    print(f"\n❌ Erreur lors du chargement de LLaMA : {e}")
     sys.exit(1)
 
 if not os.path.exists(PIPER_BIN) or not os.path.exists(PIPER_MODEL):
     print("\n❌ ERREUR CRITIQUE : Exécutable Piper manquant !")
-    print("Le TTS (Text-to-Speech) ne peut pas fonctionner sans lui.")
-    print("-> 1. Téléchargez la version Linux amd64 : https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_linux_x86_64.tar.gz")
-    print("-> 2. Extrayez le fichier 'piper' dans le dossier 'backend/piper/'")
-    print("-> 3. Téléchargez la voix '.onnx' correspondante et placez-la aussi dans ce dossier.")
+    print("-> 1. Téléchargez : https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_linux_x86_64.tar.gz")
     sys.exit(1)
+
+print("⏳ Chargement des modèles IA en parallèle...")
+
+def load_whisper():
+    try:
+        model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type="float16")
+        print("✅ Whisper chargé (GPU)")
+        return model
+    except Exception as e:
+        model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+        print("⚠️ Whisper chargé (CPU)")
+        return model
+
+def load_llama():
+    try:
+        model = Llama(
+            model_path=LLM_MODEL_PATH,
+            n_gpu_layers=-1,
+            n_ctx=4096,
+            verbose=False
+        )
+        print("✅ LLaMA chargé (GPU)")
+        return model
+    except Exception as e:
+        print(f"\n❌ Erreur LLaMA : {e}")
+        sys.exit(1)
+
+# Lancement parallèle via ThreadPoolExecutor
+with concurrent.futures.ThreadPoolExecutor() as executor:
+    future_w = executor.submit(load_whisper)
+    future_l = executor.submit(load_llama)
+
+    whisper = future_w.result()
+    llm = future_l.result()
 
 # =========================
 # FONCTIONS DU PIPELINE

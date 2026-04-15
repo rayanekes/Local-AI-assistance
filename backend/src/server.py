@@ -62,7 +62,8 @@ async def synthese_memoire_background(nouvelle_info, llm_instance):
 # CONFIGURATION MATÉRIEL
 # =========================
 
-MODELS_DIR = os.path.join(BASE_DIR, "models")
+# Le dossier des modèles lourds est désormais mutualisé avec l'ancien projet
+MODELS_DIR = "/home/rayane/projet_robot/models"
 INPUT_WAV = os.path.join(BASE_DIR, "input.wav")
 
 SAMPLE_RATE_MIC = 16000
@@ -97,39 +98,60 @@ SYSTEM_PROMPT = (
 conversation_history = [{"role": "system", "content": SYSTEM_PROMPT}]
 
 # =========================
-# INITIALISATION ML
+# INITIALISATION ML PARALLÈLE
 # =========================
 
 import sys
+import concurrent.futures
 
-# Vérification de l'existence des modèles lourds (non inclus dans git)
 if not os.path.exists(LLM_MODEL_PATH):
     print(f"\n❌ ERREUR CRITIQUE : Modèle IA (GGUF) introuvable dans '{LLM_MODEL_PATH}'.")
-    print("Veuillez copier le modèle depuis votre environnement précédent vers le dossier 'backend/models/'.")
     sys.exit(1)
 
 if not os.path.exists(PIPER_BIN) or not os.path.exists(PIPER_MODEL):
     print(f"\n❌ ERREUR CRITIQUE : Exécutable ou modèle Piper introuvable dans '{os.path.dirname(PIPER_BIN)}'.")
-    print("Veuillez copier Piper depuis votre environnement précédent.")
     sys.exit(1)
 
-try:
-    whisper = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type="float16")
-except Exception as e:
-    whisper = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+print("⏳ Chargement des modèles IA en parallèle...")
 
-vad_model = load_silero_vad()
+def load_whisper():
+    try:
+        model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type="float16")
+        print("✅ Whisper chargé (GPU)")
+        return model
+    except Exception as e:
+        model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+        print("⚠️ Whisper chargé (CPU)")
+        return model
 
-try:
-    llm = Llama(
-        model_path=LLM_MODEL_PATH,
-        n_gpu_layers=-1,
-        n_ctx=4096,
-        verbose=False
-    )
-except Exception as e:
-    print(f"\n❌ Erreur de chargement de Llama.cpp : {e}")
-    sys.exit(1)
+def load_llama():
+    try:
+        model = Llama(
+            model_path=LLM_MODEL_PATH,
+            n_gpu_layers=-1,
+            n_ctx=4096,
+            verbose=False
+        )
+        print("✅ LLaMA chargé (GPU)")
+        return model
+    except Exception as e:
+        print(f"\n❌ Erreur LLaMA: {e}")
+        sys.exit(1)
+
+def load_vad():
+    model = load_silero_vad()
+    print("✅ Silero VAD chargé")
+    return model
+
+# Lancer le chargement dans 3 threads parallèles (Diminue la latence de démarrage (I/O))
+with concurrent.futures.ThreadPoolExecutor() as executor:
+    future_whisper = executor.submit(load_whisper)
+    future_llama = executor.submit(load_llama)
+    future_vad = executor.submit(load_vad)
+
+    whisper = future_whisper.result()
+    llm = future_llama.result()
+    vad_model = future_vad.result()
 
 # =========================
 # OUTILS
