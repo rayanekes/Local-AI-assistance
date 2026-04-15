@@ -1,0 +1,58 @@
+{
+  "project_name": "Robot Assistant IA Local Temps Réel (Rayane)",
+  "goal": "Développer un Agent Autonome IA conversationnel fonctionnant 100% en local, avec latence ultra-faible, gestion des interruptions (Barge-in), mémoire contextuelle (RAG) et client matériel interactif.",
+  "target_audience_language": "Frarija (Mélange Darija Marocain et Français technique, ex: 'Terminale STE, ADC, ATC, PE, Transmettre, ESP32').",
+
+  "hardware": {
+    "server": {
+      "os": "Pop!_OS (Ubuntu 24.04)",
+      "gpu": "NVIDIA RTX 4050 (6GB VRAM) - Goulot d'étranglement critique : Optimisation VRAM absolue requise.",
+      "cuda_version": "13.0"
+    },
+    "client": {
+      "microcontroller": "ESP32 (Dual-Core)",
+      "input_audio": "Microphone INMP441 (I2S, 16kHz) - Pins: WS=25, SCK=32, SD=33",
+      "output_audio": "Haut-parleur MAX98357A (I2S, 22.05kHz) - Pins: LRC_WS=26, BCLK=27, DIN=22",
+      "display": "Écran TFT ILI9341_2 (2.4\") avec lecteur de carte SD intégré",
+      "spi_pins": {
+        "MOSI": 23, "MISO": 19, "SCK": 18, "TFT_CS": 14, "TFT_DC": 2, "TFT_RST": 4, "SD_CS": 5
+      }
+    }
+  },
+
+  "software_stack": {
+    "backend_python": {
+      "stt": "faster-whisper (modèle small, float16, CUDA). Utilise task='translate' vers anglais + initial_prompt technique.",
+      "vad": "silero_vad (PyTorch). Gère le Barge-in (interruption).",
+      "llm": "llama-cpp-python (Qwen2.5-3B-Instruct-Q5_K_M.gguf, n_gpu_layers=-1).",
+      "tts": "Piper (fr_FR-siwis-medium.onnx) appelé via asyncio.create_subprocess_exec (stdout asynchrone).",
+      "llm_constraint": "Le prompt force une réponse JSON avec un champ 'speech' STRICTEMENT en français pur (pour le TTS).",
+      "memory_rag": "Mémoire dynamique stockée dans backend/memory/memoire_utilisateur.json, mise à jour en tâche de fond.",
+      "websocket_server": "Serveur asyncio pur. Aucune fonction bloquante (utilisation de asyncio.to_thread pour Whisper et le flux LLM)."
+    },
+    "firmware_cpp": {
+      "framework": "Arduino (via PlatformIO, env: esp32dev).",
+      "architecture": "Modulaire & FreeRTOS. Core 0 gère le réseau, Core 1 gère le matériel.",
+      "modules": [
+        "network_ws: Gère Wi-Fi et WebSockets. Sérialise l'audio réseau dans des structures 'AudioChunk'.",
+        "audio_i2s: Gère les DMA I2S avec fréquences asymétriques (16kHz micro, 22050Hz haut-parleur).",
+        "display_tft: Gère le TFT et la carte SD (via TFT_eSPI). Dessine des BMP 24-bits."
+      ],
+      "ipc_safety": "Passage des buffers audio et JSON via FreeRTOS Queues (xQueueCreate, xQueueSend) avec allocation dynamique (malloc/free) pour éviter les fuites et corruptions.",
+      "animations": "Tâche asynchrone basée sur xQueueReceive timeouts pour alterner les images BMP sur la carte SD (simule des clignements)."
+    }
+  },
+
+  "testing_tools": {
+    "proxy_mic_pc": "Script (backend/tools/proxy_mic_pc.py) qui remplace le micro ESP32 par le micro du PC via 'sounddevice' tout en forwardant les réponses du serveur vers l'ESP32. (Port Proxy: 8766, Port Serveur IA: 8765).",
+    "face_generator": "Script Python (backend/tools/generate_faces.py) avec Pillow générant des paires d'images BMP 24-bits non-compressées en 320x240 pixels (ex: joie_1.bmp, joie_2.bmp)."
+  },
+
+  "developer_directives": [
+    "Toujours communiquer en français.",
+    "Agir en tant que 'Docteur Google Jules', Directeur de Recherche en Systèmes Autonomes.",
+    "Comprendre que Python est 100% asynchrone (pas de 'time.sleep()' ou appels bloquants).",
+    "Comprendre que C++ est régi par FreeRTOS. Ne jamais utiliser de VLA (Variable-Length Arrays) ou de variables globales non protégées pour la mémoire partagée.",
+    "Toujours lire et mettre à jour ce fichier JSON après de grands changements architecturaux."
+  ]
+}
