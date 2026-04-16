@@ -26,6 +26,7 @@ SAMPLE_RATE_MIC = 16000
 SAMPLE_RATE_TTS = 22050
 
 LLM_MODEL_PATH = os.path.join(MODELS_DIR, "qwen2.5-7b-instruct-q4_k_m.gguf")
+LLM_MODEL_PATH_SPLIT = os.path.join(MODELS_DIR, "qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf")
 WHISPER_MODEL = "medium"
 WHISPER_DEVICE = "cuda"
 
@@ -49,9 +50,13 @@ SYSTEM_PROMPT = (
 # =========================
 import concurrent.futures
 
-if not os.path.exists(LLM_MODEL_PATH):
-    print(f"\n❌ ERREUR CRITIQUE : Modèle IA introuvable !")
-    print(f"Le fichier attendu est : {LLM_MODEL_PATH}")
+if os.path.exists(LLM_MODEL_PATH_SPLIT):
+    actual_llm_path = LLM_MODEL_PATH_SPLIT
+elif os.path.exists(LLM_MODEL_PATH):
+    actual_llm_path = LLM_MODEL_PATH
+else:
+    print(f"\n❌ ERREUR CRITIQUE : Modèle IA introuvable dans '{MODELS_DIR}' !")
+    print(f"Le fichier attendu est : '{os.path.basename(LLM_MODEL_PATH)}' OU '{os.path.basename(LLM_MODEL_PATH_SPLIT)}'")
     sys.exit(1)
 
 if not shutil.which(PIPER_BIN):
@@ -85,7 +90,7 @@ def load_whisper():
 def load_llama():
     try:
         model = Llama(
-            model_path=LLM_MODEL_PATH,
+            model_path=actual_llm_path,
             n_gpu_layers=-1,
             n_ctx=4096,
             verbose=False,
