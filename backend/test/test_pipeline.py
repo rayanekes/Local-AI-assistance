@@ -12,8 +12,11 @@ import scipy.io.wavfile as wav
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(BASE_DIR)
 
+import torch
 from faster_whisper import WhisperModel
 from llama_cpp import Llama
+from silero_vad import load_silero_vad, get_speech_timestamps
+from collections import deque
 
 # =========================
 # CONFIGURATION
@@ -108,41 +111,62 @@ def load_llama():
         print(f"\n❌ Erreur LLaMA : {e}")
         sys.exit(1)
 
+def load_vad():
+    model = load_silero_vad()
+    print("✅ Silero VAD chargé")
+    return model
+
 # Lancement parallèle via ThreadPoolExecutor
 with concurrent.futures.ThreadPoolExecutor() as executor:
     future_w = executor.submit(load_whisper)
     future_l = executor.submit(load_llama)
+    future_v = executor.submit(load_vad)
 
     whisper = future_w.result()
     llm = future_l.result()
+    vad_model = future_v.result()
+
+# =========================
+# OUTILS D'EXTRACTION
+# =========================
+class JSONSpeechExtractor:
+    def __init__(self):
+        self.state = 'WAIT'
+        self.buffer = ""
+
+    def extract_chunk(self, token):
+        self.buffer += token
+        if self.state == 'WAIT':
+            match = re.search(r'"speech"\s*:\s*"', self.buffer)
+            if match:
+                self.state = 'EXTRACTING'
+                self.buffer = self.buffer[match.end():]
+            elif len(self.buffer) > 100:
+                self.buffer = self.buffer[-50:]
+            return ""
+
+        if self.state == 'EXTRACTING':
+            match = re.search(r'(?<!\\)"', self.buffer)
+            if match:
+                self.state = 'FINISHED'
+                speech = self.buffer[:match.start()]
+                self.buffer = self.buffer[match.end():]
+                return speech
+            if len(self.buffer) > 1:
+                speech = self.buffer[:-1]
+                self.buffer = self.buffer[-1:]
+                return speech
+        return ""
+
+def split_tts_sentence(buffer):
+    match = re.search(r'([.?!]+)', buffer)
+    if match and match.end() >= 10:
+        return buffer[:match.end()], buffer[match.end():]
+    return None, buffer
 
 # =========================
 # FONCTIONS DU PIPELINE
 # =========================
-
-def record_audio():
-    print("\n🎤 [1/4] ENREGISTREMENT (Appuyez sur 'Entrée' pour arrêter de parler)...")
-    q = queue.Queue()
-
-    def callback(indata, frames, time, status):
-        if status: pass
-        q.put(indata.copy())
-
-    stream = sd.InputStream(samplerate=SAMPLE_RATE_MIC, channels=1, dtype='int16', callback=callback)
-
-    audio_data = []
-    with stream:
-        input() # Attend la pression de Entrée sans bloquer le thread audio
-
-    while not q.empty():
-        audio_data.append(q.get())
-
-    if audio_data:
-        recording = np.concatenate(audio_data, axis=0)
-        wav.write(INPUT_WAV, SAMPLE_RATE_MIC, recording)
-        print("✅ Enregistrement terminé.")
-        return True
-    return False
 
 def run_stt():
     print("🧠 [2/4] TRANSCRIPTION (Faster-Whisper)...")
@@ -159,65 +183,181 @@ def run_stt():
     print(f"   -> Traduction : '{text}'")
     return text
 
-def run_llm(user_text):
-    print("🤖 [3/4] GÉNÉRATION (LLaMA)...")
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_text}
-    ]
+# Variables globales pour la gestion des interruptions
+robot_is_answering = False
+interrupt_flag = False
+conversation_history = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-    res = llm.create_chat_completion(
-        messages=messages,
-        max_tokens=200,
-        temperature=0.7
-    )
+async def read_piper_stdout(piper_proc, state_container):
+    try:
+        stream = sd.OutputStream(samplerate=SAMPLE_RATE_TTS, channels=1, dtype='int16')
+        with stream:
+            while True:
+                if state_container["interrupt"]:
+                    piper_proc.terminate()
+                    break
+                audio_out = await piper_proc.stdout.read(4096)
+                if not audio_out:
+                    break
+                audio_data = np.frombuffer(audio_out, dtype=np.int16)
+                stream.write(audio_data)
+                await asyncio.sleep(0.01)
+    except Exception:
+        pass
 
-    full_response = res["choices"][0]["message"]["content"]
-    print(f"   -> JSON brut : {full_response}")
+async def run_llm_and_tts(user_text):
+    global robot_is_answering, interrupt_flag
+    robot_is_answering = True
+    interrupt_flag = False
 
-    # Extraire la parole
-    speech_match = re.search(r'"speech"\s*:\s*"([^"]+)"', full_response)
-    if speech_match:
-        return speech_match.group(1).replace('\\n', ' ').replace('\\"', '"')
-    return "Je n'ai pas pu générer une réponse correcte."
+    print("\n🤖 [3/4] GÉNÉRATION (LLaMA) & SYNTHÈSE (Piper)...")
+    print("   [ÉCRAN] -> Affichage de reflexion_1.bmp")
 
-async def run_tts(speech_text):
-    print("🗣️ [4/4] SYNTHÈSE VOCALE (Piper)...")
+    conversation_history.append({"role": "user", "content": user_text})
+    extractor = JSONSpeechExtractor()
+    tts_buffer = ""
+    full_llm_response = ""
+    emotion_sent = False
+
     piper_proc = await asyncio.create_subprocess_exec(
         PIPER_BIN, "--model", PIPER_MODEL, "--output_raw",
-        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
     )
 
-    piper_proc.stdin.write(speech_text.encode("utf-8"))
-    await piper_proc.stdin.drain()
-    piper_proc.stdin.close()
+    state_container = {"interrupt": False}
+    stream_task = asyncio.create_task(read_piper_stdout(piper_proc, state_container))
 
-    stream = sd.OutputStream(samplerate=SAMPLE_RATE_TTS, channels=1, dtype='int16')
-    print("   🔊 Lecture en cours...")
-    with stream:
-        while True:
-            audio_out = await piper_proc.stdout.read(4096)
-            if not audio_out:
-                break
-            audio_data = np.frombuffer(audio_out, dtype=np.int16)
-            stream.write(audio_data)
+    def generate_llm_stream():
+        return llm.create_chat_completion(
+            messages=conversation_history,
+            max_tokens=200,
+            temperature=0.7,
+            stream=True
+        )
 
-    # Récupérer et afficher l'erreur si Piper plante silencieusement
-    _, stderr_data = await piper_proc.communicate()
-    if piper_proc.returncode != 0:
-        print(f"❌ Erreur Piper (Code {piper_proc.returncode}):\n{stderr_data.decode('utf-8')}")
+    print("   [ÉCRAN] -> Affichage de parle_1.bmp")
+    stream_generator = await asyncio.to_thread(generate_llm_stream)
 
+    while True:
+        if interrupt_flag:
+            print("   ⚠️ INTERRUPTION (Barge-in) !")
+            state_container["interrupt"] = True
+            break
+
+        try:
+            chunk = await asyncio.to_thread(next, stream_generator)
+        except StopIteration:
+            break
+
+        delta = chunk["choices"][0].get("delta", {})
+        if "content" in delta:
+            token = delta["content"]
+            full_llm_response += token
+
+            # Simulation d'envoi d'émotion à l'écran
+            if not emotion_sent:
+                emotion_match = re.search(r'"emotion"\s*:\s*"([^"]+)"', full_llm_response)
+                if emotion_match:
+                    emotion = emotion_match.group(1)
+                    print(f"   [ÉCRAN] -> Changement d'émotion : {emotion}_1.bmp")
+                    emotion_sent = True
+
+            speech_part = extractor.extract_chunk(token)
+            if speech_part:
+                speech_part = speech_part.replace('\\n', ' ').replace('\\"', '"')
+                tts_buffer += speech_part
+
+                sentence, tts_buffer = split_tts_sentence(tts_buffer)
+                if sentence:
+                    piper_proc.stdin.write(sentence.encode("utf-8"))
+                    await piper_proc.stdin.drain()
+
+    if tts_buffer.strip() and not interrupt_flag:
+        piper_proc.stdin.write(tts_buffer.encode("utf-8"))
+        await piper_proc.stdin.drain()
+        piper_proc.stdin.close()
+
+    if interrupt_flag:
+        if not piper_proc.stdin.is_closing():
+            piper_proc.stdin.close()
+
+    await stream_task
+
+    if piper_proc.returncode is None:
+        piper_proc.terminate()
+
+    robot_is_answering = False
+    print("   [ÉCRAN] -> Retour au repos (idle_1.bmp)")
     print("✅ Cycle terminé.\n" + "="*50)
 
+    if full_llm_response and not interrupt_flag:
+        conversation_history.append({"role": "assistant", "content": full_llm_response})
+
 async def main():
-    while True:
-        if record_audio():
-            text = run_stt()
-            if text:
-                speech = run_llm(text)
-                await run_tts(speech)
-        else:
-            print("Erreur d'enregistrement.")
+    global robot_is_answering, interrupt_flag
+    print("\n🎧 En écoute continue... Parlez dans le micro du PC.")
+
+    q = queue.Queue()
+    def callback(indata, frames, time, status):
+        if status: pass
+        q.put(indata.copy())
+
+    stream = sd.InputStream(samplerate=SAMPLE_RATE_MIC, channels=1, dtype='int16', callback=callback)
+
+    is_speaking = False
+    audio_buffer = []
+    pre_roll = deque(maxlen=8)
+    silence_frames = 0
+    silence_threshold = 20
+
+    with stream:
+        while True:
+            # Récupère le chunk audio sans bloquer l'Event Loop
+            chunk = await asyncio.to_thread(q.get)
+
+            audio_tensor = torch.from_numpy(chunk.astype(np.float32) / 32768.0)
+
+            # Vad detection
+            timestamps = await asyncio.to_thread(get_speech_timestamps, audio_tensor, vad_model, sampling_rate=SAMPLE_RATE_MIC, threshold=0.3)
+            voice_detected = len(timestamps) > 0
+
+            # AEC heuristique
+            rms = np.sqrt(np.mean(audio_tensor.numpy()**2))
+
+            if not is_speaking:
+                pre_roll.append(chunk)
+                if voice_detected:
+                    barge_in_threshold = 0.05
+                    if robot_is_answering and rms < barge_in_threshold:
+                        continue # Écho potentiel
+
+                    is_speaking = True
+                    audio_buffer.extend(list(pre_roll))
+                    pre_roll.clear()
+                    silence_frames = 0
+                    print("\n🎤 Voix détectée...")
+
+                    if robot_is_answering:
+                        interrupt_flag = True
+            else:
+                audio_buffer.append(chunk)
+                if voice_detected:
+                    silence_frames = 0
+                else:
+                    silence_frames += 1
+                    if silence_frames > silence_threshold:
+                        is_speaking = False
+                        print("⏸️ Silence détecté, traitement...")
+
+                        audio_data = np.concatenate(audio_buffer)
+                        wav.write(INPUT_WAV, SAMPLE_RATE_MIC, audio_data)
+
+                        text = await asyncio.to_thread(run_stt)
+                        if text:
+                            asyncio.create_task(run_llm_and_tts(text))
+
+                        audio_buffer = []
+                        silence_frames = 0
 
 if __name__ == "__main__":
     try:

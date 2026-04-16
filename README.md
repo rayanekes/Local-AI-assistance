@@ -61,10 +61,36 @@ python tools/simulateur_pc.py
 python test/test_pipeline.py
 ```
 
-## Firmware
+## Firmware (Câblage & Matériel)
 Le code est conçu pour être compilé et flashé avec [PlatformIO](https://platformio.org/).
 
-### Prérequis
+### Schéma de Câblage (Pinout ESP32)
+Le robot requiert une connexion précise entre l'ESP32 et les périphériques I2S/SPI. Voici le tableau de connexion officiel :
+
+| Composant | Broche Composant | Broche ESP32 (GPIO) | Notes |
+| :--- | :--- | :--- | :--- |
+| **Microphone (INMP441)** | L/R | GND | Pour sélectionner le canal gauche par défaut |
+| | WS | 25 | Word Select (Horloge de canal) |
+| | SCK | 32 | Serial Clock (Horloge binaire) |
+| | SD | 33 | Serial Data (Données audio sortantes) |
+| **Haut-Parleur (MAX98357A)**| LRC (WS) | 26 | Word Select |
+| | BCLK | 27 | Bit Clock |
+| | DIN | 22 | Data IN (Données audio entrantes) |
+| | VIN | 5V / VIN | Attention: Préférable d'alimenter avec un Step-Down 5V externe |
+| **Écran (ILI9341 SPI)** | MOSI | 23 | Master Out Slave In |
+| | MISO | 19 | Master In Slave Out |
+| | SCK | 18 | SPI Clock |
+| | CS | 14 | Chip Select (Écran) |
+| | DC | 2 | Data/Command |
+| | RST | 4 | Reset |
+| **Lecteur Carte SD** | CS | 5 | Chip Select (Carte SD) |
+| | MOSI, MISO, SCK | 23, 19, 18 | *Partagés avec le bus SPI de l'écran TFT* |
+
+> **⚠️ AVERTISSEMENT ALIMENTATION :**
+> Une seule batterie 18650 "générique" (3.7V) n'est **PAS** suffisante pour alimenter simultanément l'ESP32 (Wi-Fi), l'amplificateur audio et l'écran TFT. Les pics de courant (notamment lors de l'envoi Wi-Fi ou de l'audio) vont causer des chutes de tension (*Brownouts*) et redémarrer la carte.
+> **Solution recommandée :** Utilisez un PowerBank 5V/2A branché en USB, ou 2 batteries 18650 en série (7.4V) régulées par un module Step-Down LM2596 réglé à 5.0V.
+
+### Prérequis Logiciels
 - VSCode avec l'extension PlatformIO
 - Une carte ESP32
 
