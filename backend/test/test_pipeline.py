@@ -315,7 +315,8 @@ async def main():
             # Récupère le chunk audio sans bloquer l'Event Loop
             chunk = await asyncio.to_thread(q.get)
 
-            audio_tensor = torch.from_numpy(chunk.astype(np.float32) / 32768.0)
+            # On flatten() pour transformer le [N, 1] de sounddevice en [N] (1D) pour Silero VAD
+            audio_tensor = torch.from_numpy(chunk.flatten().astype(np.float32) / 32768.0)
 
             # Vad detection
             timestamps = await asyncio.to_thread(get_speech_timestamps, audio_tensor, vad_model, sampling_rate=SAMPLE_RATE_MIC, threshold=0.3)
