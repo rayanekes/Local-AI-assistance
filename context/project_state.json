@@ -7,7 +7,8 @@
     "server": {
       "os": "Pop!_OS (Ubuntu 24.04)",
       "gpu": "NVIDIA RTX 4050 (6GB VRAM) - Goulot d'étranglement critique : Optimisation VRAM absolue requise.",
-      "cuda_version": "13.0"
+      "cuda_version": "13.0",
+      "vram_optimization": "Active (int8_float16, use_mmap=True)"
     },
     "client": {
       "microcontroller": "ESP32 (Dual-Core)",
@@ -22,9 +23,9 @@
 
   "software_stack": {
     "backend_python": {
-      "stt": "faster-whisper (modèle small, float16, CUDA). Utilise task='translate' vers anglais + initial_prompt technique.",
-      "vad": "silero_vad (PyTorch). Gère le Barge-in (interruption).",
-      "llm": "llama-cpp-python (Qwen2.5-3B-Instruct-Q5_K_M.gguf, n_gpu_layers=-1).",
+      "stt": "faster-whisper (modèle medium, float16, CUDA, beam_size=5). Utilise task='translate' vers anglais + initial_prompt technique.",
+      "vad": "silero_vad (PyTorch, threshold=0.3). Gère le Barge-in (interruption).",
+      "llm": "llama-cpp-python (Qwen2.5-7B-Instruct-Q4_K_M.gguf avec support des fichiers split, n_gpu_layers=-1).",
       "tts": "Piper (fr_FR-siwis-medium.onnx) appelé via asyncio.create_subprocess_exec (stdout asynchrone).",
       "llm_constraint": "Le prompt force une réponse JSON avec un champ 'speech' STRICTEMENT en français pur (pour le TTS).",
       "memory_rag": "Mémoire dynamique stockée dans backend/memory/memoire_utilisateur.json, mise à jour en tâche de fond.",
