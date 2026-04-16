@@ -25,8 +25,8 @@ INPUT_WAV = os.path.join(BASE_DIR, "test_input.wav")
 SAMPLE_RATE_MIC = 16000
 SAMPLE_RATE_TTS = 22050
 
-LLM_MODEL_PATH = os.path.join(MODELS_DIR, "qwen2.5-3b-instruct-q5_k_m.gguf")
-WHISPER_MODEL = "small"
+LLM_MODEL_PATH = os.path.join(MODELS_DIR, "qwen2.5-7b-instruct-q4_k_m.gguf")
+WHISPER_MODEL = "medium"
 WHISPER_DEVICE = "cuda"
 
 import shutil
@@ -143,7 +143,7 @@ def run_stt():
     segments, _ = whisper.transcribe(
         INPUT_WAV,
         task="translate",
-        beam_size=2,
+            beam_size=5,
         initial_prompt=prompt_darija_tech
     )
     text = "".join([s.text for s in segments]).strip()

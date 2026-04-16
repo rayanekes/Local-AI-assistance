@@ -70,8 +70,8 @@ SAMPLE_RATE_MIC = 16000
 SAMPLE_RATE_TTS = 22050
 CHUNK_SIZE_MIC = 1024
 
-LLM_MODEL_PATH = os.path.join(MODELS_DIR, "qwen2.5-3b-instruct-q5_k_m.gguf")
-WHISPER_MODEL = "small"
+LLM_MODEL_PATH = os.path.join(MODELS_DIR, "qwen2.5-7b-instruct-q4_k_m.gguf")
+WHISPER_MODEL = "medium" # Modèle plus grand pour une meilleure détection, tout en gérant la VRAM (6GB)
 WHISPER_DEVICE = "cuda"
 
 import shutil
@@ -254,7 +254,7 @@ async def handle_esp32_connection(websocket):
         segments, _ = whisper.transcribe(
             wav_path,
             task="translate",
-            beam_size=2,
+            beam_size=5, # Plus grand beam_size pour plus de précision
             initial_prompt=prompt_darija_tech
         )
         return "".join([s.text for s in segments]).strip()
@@ -354,7 +354,8 @@ async def handle_esp32_connection(websocket):
                 chunk = np.frombuffer(message, dtype=np.int16)
                 audio_tensor = torch.from_numpy(chunk.astype(np.float32) / 32768.0)
 
-                timestamps = await asyncio.to_thread(get_speech_timestamps, audio_tensor, vad_model, sampling_rate=SAMPLE_RATE_MIC)
+                # Abaissement du seuil de probabilité pour détecter la voix plus facilement (par défaut c'est souvent 0.5)
+                timestamps = await asyncio.to_thread(get_speech_timestamps, audio_tensor, vad_model, sampling_rate=SAMPLE_RATE_MIC, threshold=0.3)
                 voice_detected = len(timestamps) > 0
 
                 # Calcul de l'énergie (RMS) pour l'AEC heuristique
