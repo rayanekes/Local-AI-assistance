@@ -79,8 +79,8 @@ print("⏳ Chargement des modèles IA en parallèle...")
 
 def load_whisper():
     try:
-        model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type="float16")
-        print("✅ Whisper chargé (GPU)")
+        model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type="int8_float16")
+        print("✅ Whisper chargé (GPU - Optimisé VRAM)")
         return model
     except Exception as e:
         model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
@@ -89,9 +89,13 @@ def load_whisper():
 
 def load_llama():
     try:
+        import llama_cpp
+        if not llama_cpp.llama_supports_gpu_offload():
+            print("\n⚠️ AVERTISSEMENT : llama-cpp-python tourne sur le CPU !")
+
         model = Llama(
             model_path=actual_llm_path,
-            n_gpu_layers=-1,
+            n_gpu_layers=20,
             n_ctx=4096,
             verbose=False,
             # Charge les poids via la mémoire virtuelle du système (Memory Mapping) pour réduire la RAM système

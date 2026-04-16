@@ -137,8 +137,9 @@ print("⏳ Chargement des modèles IA en parallèle...")
 
 def load_whisper():
     try:
-        model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type="float16")
-        print("✅ Whisper chargé (GPU)")
+        # Utilisation de int8_float16 pour réduire considérablement la VRAM de Whisper (garde Whisper rapide sur GPU)
+        model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type="int8_float16")
+        print("✅ Whisper chargé (GPU - Optimisé VRAM)")
         return model
     except Exception as e:
         model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
@@ -147,16 +148,27 @@ def load_whisper():
 
 def load_llama():
     try:
+        # Vérification interne pour savoir si CUDA est réellement activé dans llama.cpp
+        import llama_cpp
+        if not llama_cpp.llama_supports_gpu_offload():
+            print("\n⚠️ AVERTISSEMENT : llama-cpp-python n'a pas été compilé avec le support CUDA !")
+            print("Le modèle tourne actuellement sur le CPU (très lent, 100% CPU, faible utilisation VRAM).")
+            print("Pour corriger : CMAKE_ARGS=\"-DGGML_CUDA=on\" pip install llama-cpp-python --force-reinstall --no-cache-dir\n")
+
         model = Llama(
             model_path=actual_llm_path,
-            n_gpu_layers=-1,
+            # On fixe à 20 layers pour que LLaMA laisse environ 300-500 Mo de VRAM vides (les layers restantes iront sur le CPU)
+            n_gpu_layers=20,
             n_ctx=4096,
             verbose=False,
             # Charge les poids via la mémoire virtuelle du système (Memory Mapping) pour réduire la RAM système
             use_mmap=True,
             use_mlock=False
         )
-        print("✅ LLaMA chargé (GPU)")
+        if llama_cpp.llama_supports_gpu_offload():
+            print("✅ LLaMA chargé (GPU - CUDA)")
+        else:
+            print("⚠️ LLaMA chargé (CPU - TRES LENT)")
         return model
     except Exception as e:
         print(f"\n❌ Erreur LLaMA: {e}")
