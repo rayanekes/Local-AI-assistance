@@ -285,6 +285,12 @@ async def handle_esp32_connection(websocket):
         interrupt_flag = False
 
         conversation_history.append({"role": "user", "content": transcribed_text})
+
+        # Security: Limit history size to prevent unbounded memory growth (DoS)
+        # Keep the system prompt (index 0) and the 10 most recent messages
+        if len(conversation_history) > 11:
+            conversation_history[:] = [conversation_history[0]] + conversation_history[-10:]
+
         await send_json_command("status", "thinking")
 
         extractor = JSONSpeechExtractor()
