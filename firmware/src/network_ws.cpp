@@ -7,6 +7,7 @@ extern QueueHandle_t audioTxQueue;
 
 // Définition de l'instance statique
 WebSocketsClient Network_WS::webSocket;
+String Network_WS::authHeader = "";
 
 void Network_WS::initWiFi(const char* ssid, const char* password) {
     Serial.print("Connexion au Wi-Fi ");
@@ -22,8 +23,13 @@ void Network_WS::initWiFi(const char* ssid, const char* password) {
     Serial.println(WiFi.localIP());
 }
 
-void Network_WS::initWebSocket(const char* server_ip, uint16_t server_port) {
+void Network_WS::initWebSocket(const char* server_ip, uint16_t server_port, const char* token) {
+    // Format attendu par arduinoWebSockets : "Key: Value"
+    // On le stocke dans une variable membre statique pour qu'elle persiste pendant le handshake
+    authHeader = "Authorization: Bearer " + String(token);
+
     webSocket.begin(server_ip, server_port, "/");
+    webSocket.setExtraHeaders(authHeader.c_str());
     webSocket.onEvent(webSocketEvent);
     webSocket.setReconnectInterval(5000); // Reconnexion auto après 5s
     Serial.println("WebSocket Client initialisé.");

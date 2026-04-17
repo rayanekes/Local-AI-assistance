@@ -232,6 +232,14 @@ def split_tts_sentence(buffer):
 # SERVEUR WEBSOCKET ASYNC
 # =========================
 
+AUTH_TOKEN = os.environ.get("WS_AUTH_TOKEN", "secure_token_esp32_rayane_2024")
+
+async def process_auth(connection, request):
+    auth_header = request.headers.get("Authorization")
+    if auth_header != f"Bearer {AUTH_TOKEN}":
+        print(f"⚠️ [Security] Tentative de connexion WebSocket non autorisée")
+        return connection.respond(403, "Unauthorized\n")
+
 async def handle_esp32_connection(websocket):
     is_speaking = False
     robot_is_answering = False
@@ -421,7 +429,8 @@ async def handle_esp32_connection(websocket):
 
 
 async def main():
-    async with websockets.serve(handle_esp32_connection, "0.0.0.0", 8765):
+    # On utilise process_request pour une authentification au niveau du handshake HTTP
+    async with websockets.serve(handle_esp32_connection, "0.0.0.0", 8765, process_request=process_auth):
         await asyncio.Future()
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ const char* ssid = "VOTRE_SSID";
 const char* password = "VOTRE_PASSWORD";
 const char* ws_server_ip = "192.168.x.x"; // IP de votre PC Pop!_OS
 const uint16_t ws_server_port = 8765;
+const char* ws_auth_token = "secure_token_esp32_rayane_2024";
 
 // --- Instances des Modules ---
 TFT_Display display;
@@ -124,7 +125,7 @@ void displayTask(void *pvParameters) {
 // Gère la connexion et l'envoi thread-safe des flux montants
 void networkTask(void *pvParameters) {
   network.initWiFi(ssid, password);
-  network.initWebSocket(ws_server_ip, ws_server_port);
+  network.initWebSocket(ws_server_ip, ws_server_port, ws_auth_token);
 
   AudioChunk rxChunk;
 
