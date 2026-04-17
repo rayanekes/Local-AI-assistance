@@ -168,13 +168,13 @@ def split_tts_sentence(buffer):
 # FONCTIONS DU PIPELINE
 # =========================
 
-def run_stt():
+def run_stt(audio_array):
     print("🧠 [2/4] TRANSCRIPTION (Faster-Whisper)...")
     custom_vocab = "Terminale STE, ADC, ATC, PE, Transmettre, ESP32."
     prompt_darija_tech = f"Bonjour. Kidayr labas? Wach nbedaw l'installation dial le serveur? {custom_vocab}"
 
     segments, _ = whisper.transcribe(
-        INPUT_WAV,
+        audio_array,
         task="translate",
             beam_size=5,
         initial_prompt=prompt_darija_tech
@@ -351,9 +351,9 @@ async def main():
                         print("⏸️ Silence détecté, traitement...")
 
                         audio_data = np.concatenate(audio_buffer)
-                        wav.write(INPUT_WAV, SAMPLE_RATE_MIC, audio_data)
+                        audio_float = audio_data.flatten().astype(np.float32) / 32768.0
 
-                        text = await asyncio.to_thread(run_stt)
+                        text = await asyncio.to_thread(run_stt, audio_float)
                         if text:
                             asyncio.create_task(run_llm_and_tts(text))
 
