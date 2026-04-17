@@ -9,7 +9,7 @@
 class Network_WS {
 public:
     void initWiFi(const char* ssid, const char* password);
-    void initWebSocket(const char* server_ip, uint16_t server_port);
+    void initWebSocket(const char* server_ip, uint16_t server_port, const char* token);
 
     // Doit être appelé continuellement dans la boucle (ou la tâche FreeRTOS)
     void loop();
@@ -22,6 +22,7 @@ public:
 
 private:
     static WebSocketsClient webSocket;
+    static String authHeader; // Stocke le header de manière persistante pour éviter le use-after-scope
     static void handleJsonMessage(uint8_t * payload);
 };
 

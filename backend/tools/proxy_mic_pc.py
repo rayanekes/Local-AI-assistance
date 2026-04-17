@@ -2,9 +2,11 @@ import asyncio
 import websockets
 import sounddevice as sd
 import numpy as np
+import os
 
 # IP du serveur IA principal
 IA_SERVER_URI = "ws://127.0.0.1:8765"
+AUTH_TOKEN = os.environ.get("WS_AUTH_TOKEN", "secure_token_esp32_rayane_2024")
 
 # Port sur lequel le Proxy va écouter l'ESP32
 PROXY_PORT = 8766
@@ -37,8 +39,17 @@ async def handle_esp32(esp_websocket):
     """
     print("🔌 [Proxy] ESP32 Connecté au proxy !")
     try:
-        async with websockets.connect(IA_SERVER_URI) as ia_websocket:
-            print("🔗 [Proxy] Connecté au Serveur IA principal.")
+        headers = {"Authorization": f"Bearer {AUTH_TOKEN}"}
+        # Gestion de la compatibilité entre les versions de la librairie websockets
+        try:
+            # Essai pour les versions récentes (additional_headers)
+            ia_websocket_cm = websockets.connect(IA_SERVER_URI, additional_headers=headers)
+        except TypeError:
+            # Fallback pour les anciennes versions (extra_headers)
+            ia_websocket_cm = websockets.connect(IA_SERVER_URI, extra_headers=headers)
+
+        async with ia_websocket_cm as ia_websocket:
+            print("🔗 [Proxy] Connecté au Serveur IA principal (Auth OK).")
 
             # Lancer la capture du micro du PC vers l'IA
             mic_task = asyncio.create_task(mic_to_server(ia_websocket))
