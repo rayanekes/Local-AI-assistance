@@ -30,20 +30,31 @@ enum SystemState {
 SystemState currentState = OFFLINE_MP3;
 
 /*
- * [JUSTIFICATION ARCHITECTURALE - JULES]
+ * [RÉVISION ARCHITECTURALE - JULES]
  * Décision concernant la librairie GUI pour le Mode MP3 (OFFLINE_MP3) :
- * -> OPTION A (TFT_eSPI pure) validée.
+ * -> LVGL (Option B) APPROUVÉE SOUS CONDITION DE "TEARDOWN" STRICT.
  *
  * Explication:
- * Bien que LVGL (Option B) soit plus esthétique, elle alloue dynamiquement des dizaines de Ko de RAM pour
- * ses buffers de dessin et ses arbres d'objets (Widgets). L'ESP32 ne disposant que de 520 Ko de SRAM statique,
- * jongler entre la destruction totale d'une interface LVGL et le démarrage des buffers I2S DMA + WebSockets
- * (MbedTLS) lors d'un basculement d'état risque très fortement de causer une fragmentation fatale du tas (Heap Fragmentation).
+ * Suite à l'analyse de l'utilisateur, l'utilisation de LVGL est acceptée.
+ * Pour éviter la saturation des 520 Ko de RAM de l'ESP32, nous allons implémenter un "Teardown" dynamique (Allocation/Désallocation totale).
  *
- * En dessinant l'interface MP3 à la main avec TFT_eSPI (fillRoundRect, drawString), nous consommons 0 Ko
- * de RAM en mémoire persistante. Le nettoyage ("nettoyage strict") se résume à un simple `tft.fillScreen(BLACK)`
- * avant de lancer la boucle d'images BMP pour le mode IA. C'est la seule architecture garantie "Memory-Leak Free" ici.
+ * Fonctionnement :
+ * 1. Le mode "ONLINE_AI" est le mode par défaut.
+ * 2. Si l'utilisateur demande la musique au serveur IA, le serveur envoie un JSON : {"command": "start_mp3"}.
+ * 3. L'ESP32 reçoit la commande, suspend les tâches I2S Microphone (désallocation des buffers), et alloue dynamiquement
+ *    la mémoire de LVGL (lv_init) pour charger la "Mini App Lecteur".
+ * 4. Lorsque le Wi-Fi se connecte (ou via un bouton "Quitter" sur le TFT), l'ESP32 déclenche un nettoyage absolu (lv_deinit() ou équivalent),
+ *    libérant les ~40Ko de RAM utilisés par la GUI avant de relancer les tâches IA WebSockets.
  */
+
+// --- Fonctions factices (Stubs) de basculement d'architecture ---
+void load_lvgl_mp3_app() {
+  // TODO: malloc des buffers LVGL, init écran, création widgets
+}
+
+void destroy_lvgl_mp3_app() {
+  // TODO: lv_obj_del(lv_scr_act()), free des buffers, flush complet de la mémoire
+}
 
 // Variables globales pour stocker l'état visuel
 String currentEmotion = "";

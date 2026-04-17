@@ -41,7 +41,8 @@
       ],
       "ipc_safety": "Passage des buffers audio et JSON via FreeRTOS Queues (xQueueCreate, xQueueSend) avec allocation dynamique (malloc/free) pour éviter les fuites et corruptions.",
       "animations": "Tâche asynchrone basée sur xQueueReceive timeouts pour alterner les images BMP sur la carte SD (simule des clignements).",
-      "latency_masking": "Lors de la réception du JSON `{\"status\": \"thinking\"}`, l'ESP32 déclenche automatiquement l'animation `reflexion` pour occuper visuellement l'utilisateur pendant que le GPU LLaMA calcule la réponse."
+      "latency_masking": "Lors de la réception du JSON `{\"status\": \"thinking\"}`, l'ESP32 déclenche automatiquement l'animation `reflexion` pour occuper visuellement l'utilisateur pendant que le GPU LLaMA calcule la réponse.",
+      "dual_state_machine": "L'ESP32 bascule entre un mode 'Lecteur MP3 Autonome' (LVGL GUI) et un mode 'IA En-Ligne'. La commande JSON `{\"command\": \"start_mp3\"}` déclenche le chargement dynamique de LVGL. La sortie du mode MP3 exige la désallocation TOTALE (Teardown) des buffers LVGL via `lv_deinit` pour prévenir la saturation des 520Ko de RAM."
     }
   },
 
