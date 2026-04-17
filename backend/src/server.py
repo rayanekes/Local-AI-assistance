@@ -55,6 +55,27 @@ async def synthese_memoire_background(nouvelle_info, llm_instance):
         res = await asyncio.to_thread(run_llm)
         nouveau_contexte = res["choices"][0]["message"]["content"].strip()
         await asyncio.to_thread(sauvegarder_memoire, nouveau_contexte)
+
+        # [Correction d'urgence] : Réinjecter la nouvelle mémoire dans le prompt système en direct
+        global conversation_history
+        nouveau_system_prompt = (
+            "You are an interactive engineering robot assistant. "
+            f"Here is what you know about the user so far: {nouveau_contexte}\n"
+            "The user's input will be provided in English (translated from Moroccan Darija and French). "
+            "You must understand perfectly, BUT you MUST reply ONLY in pure and natural French. "
+            "Never generate words in Arabic or English in your spoken response. "
+            "You also control a hardware system with an ILI9341 TFT screen. "
+            "You MUST ALWAYS respond with a strictly valid JSON object in the following format:\n"
+            "{\n"
+            "  \"speech\": \"Texte en français pur pour le robot.\",\n"
+            "  \"emotion\": \"joie|neutre|triste\",\n"
+            "  \"gpio_commands\": [{\"pin\": 4, \"state\": true}]\n"
+            "}\n"
+            "Return NOTHING except the valid JSON."
+        )
+        if len(conversation_history) > 0 and conversation_history[0]["role"] == "system":
+            conversation_history[0]["content"] = nouveau_system_prompt
+
     except Exception as e:
         pass
 
@@ -237,10 +258,13 @@ async def handle_esp32_connection(websocket):
     robot_is_answering = False
     interrupt_flag = False
 
+    import time
     audio_buffer = []
     pre_roll = deque(maxlen=8)
     silence_frames = 0
     silence_threshold = 20
+    MAX_RECORDING_TIME = 30.0 # [Correction] Timeout de sécurité en secondes
+    recording_start_time = 0
 
     async def send_json_command(key, value):
         # Envoie un JSON plat, ex: {"status": "thinking"} ou {"emotion": "joie"}
@@ -391,6 +415,7 @@ async def handle_esp32_connection(websocket):
                             continue # C'est sûrement de l'écho, on ignore
 
                         is_speaking = True
+                        recording_start_time = time.time()
                         audio_buffer.extend(list(pre_roll))
                         pre_roll.clear()
                         silence_frames = 0
@@ -404,18 +429,22 @@ async def handle_esp32_connection(websocket):
                         silence_frames = 0
                     else:
                         silence_frames += 1
-                        if silence_frames > silence_threshold:
-                            is_speaking = False
 
-                            audio_data = np.concatenate(audio_buffer)
-                            await asyncio.to_thread(wav.write, INPUT_WAV, SAMPLE_RATE_MIC, audio_data)
-                            text = await asyncio.to_thread(transcribe_audio, INPUT_WAV)
+                    # [Correction] Forcer la fin de l'enregistrement s'il dure plus de 30 secondes (évite le OOM RAM)
+                    timeout_reached = (time.time() - recording_start_time) > MAX_RECORDING_TIME
 
-                            if text:
-                                asyncio.create_task(run_llm_and_tts(text))
+                    if silence_frames > silence_threshold or timeout_reached:
+                        is_speaking = False
 
-                            audio_buffer = []
-                            silence_frames = 0
+                        audio_data = np.concatenate(audio_buffer)
+                        await asyncio.to_thread(wav.write, INPUT_WAV, SAMPLE_RATE_MIC, audio_data)
+                        text = await asyncio.to_thread(transcribe_audio, INPUT_WAV)
+
+                        if text:
+                            asyncio.create_task(run_llm_and_tts(text))
+
+                        audio_buffer = []
+                        silence_frames = 0
     except websockets.exceptions.ConnectionClosed:
         pass
 

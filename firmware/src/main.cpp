@@ -27,7 +27,11 @@ enum SystemState {
   OFFLINE_MP3, // Mode 1: Serveur IA injoignable. Lecteur MP3 Autonome (Carte SD -> I2S_1). Interface manuelle.
   ONLINE_AI    // Mode 2: Serveur IA connecté. Full-Duplex WebSockets (I2S_0 + I2S_1). Interface "Visage/Émotions".
 };
-SystemState currentState = OFFLINE_MP3;
+// Modifié pour que le mode en-ligne soit le mode par défaut au boot (ou géré dynamiquement)
+SystemState currentState = ONLINE_AI;
+
+// Nouvelle Queue pour le changement d'état "Dual-State"
+QueueHandle_t commandQueue;
 
 /*
  * [RÉVISION ARCHITECTURALE - JULES]
@@ -47,12 +51,14 @@ SystemState currentState = OFFLINE_MP3;
  *    libérant les ~40Ko de RAM utilisés par la GUI avant de relancer les tâches IA WebSockets.
  */
 
-// --- Fonctions factices (Stubs) de basculement d'architecture ---
+// --- Fonctions de basculement d'architecture (State Machine) ---
 void load_lvgl_mp3_app() {
+  Serial.println("[STATE] Basculement -> OFFLINE_MP3");
   // TODO: malloc des buffers LVGL, init écran, création widgets
 }
 
 void destroy_lvgl_mp3_app() {
+  Serial.println("[STATE] Basculement -> ONLINE_AI");
   // TODO: lv_obj_del(lv_scr_act()), free des buffers, flush complet de la mémoire
 }
 
@@ -63,6 +69,29 @@ bool isSpeaking = false;
 // ==========================================
 // TÂCHES FREERTOS
 // ==========================================
+
+// --- Tâche : Cerveau / Orchestrateur de Commandes ---
+// Gère les commandes "start_mp3" et "stop_mp3" depuis le WebSocket
+void orchestratorTask(void *pvParameters) {
+  char receivedCommand[32];
+  for(;;) {
+    if (xQueueReceive(commandQueue, &receivedCommand, portMAX_DELAY) == pdPASS) {
+      String cmd = String(receivedCommand);
+      if (cmd == "start_mp3" && currentState != OFFLINE_MP3) {
+        currentState = OFFLINE_MP3;
+        load_lvgl_mp3_app();
+      } else if (cmd == "stop_mp3" && currentState != ONLINE_AI) {
+        currentState = ONLINE_AI;
+        destroy_lvgl_mp3_app();
+
+        // Reset visuel
+        display.init();
+        currentEmotion = "neutre";
+        display.displayEmotion(currentEmotion, 1);
+      }
+    }
+  }
+}
 
 // --- Tâche : Affichage TFT (Core 1) ---
 // Gère l'affichage asynchrone et les animations (clignements)
@@ -78,6 +107,12 @@ void displayTask(void *pvParameters) {
   display.displayEmotion(currentEmotion, currentFrame);
 
   for (;;) {
+    // Si on est en mode MP3, on ne gère pas les visages
+    if (currentState == OFFLINE_MP3) {
+      vTaskDelay(100 / portTICK_PERIOD_MS);
+      continue;
+    }
+
     // Timeout court (50ms)
     if (xQueueReceive(emotionQueue, &receivedEmotion, 50 / portTICK_PERIOD_MS) == pdPASS) {
       String newEmotion = String(receivedEmotion);
@@ -150,6 +185,12 @@ void micTask(void *pvParameters) {
   const size_t bufferSize = 1024;
 
   for (;;) {
+    // Si on est en mode Lecteur MP3, on suspend la capture micro pour économiser CPU/RAM
+    if (currentState == OFFLINE_MP3) {
+      vTaskDelay(100 / portTICK_PERIOD_MS);
+      continue;
+    }
+
     // On alloue un buffer pour chaque lecture
     int16_t* micBuffer = (int16_t*)malloc(bufferSize);
 
@@ -201,16 +242,20 @@ void setup() {
 
   // Initialisation des Files d'Attente (IPC)
   emotionQueue = xQueueCreate(5, sizeof(char[32]));
+  commandQueue = xQueueCreate(5, sizeof(char[32]));
   audioTxQueue = xQueueCreate(10, sizeof(AudioChunk));
   audioRxQueue = xQueueCreate(10, sizeof(AudioChunk));
 
-  if (emotionQueue == NULL || audioTxQueue == NULL || audioRxQueue == NULL) {
+  if (emotionQueue == NULL || audioTxQueue == NULL || audioRxQueue == NULL || commandQueue == NULL) {
     Serial.println("Erreur critique: Création des Queues FreeRTOS échouée.");
     while (1);
   }
 
   // Lancement de la tâche Réseau sur le Core 0
   xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
+
+  // Lancement de la tâche d'Orchestration (State Machine) sur Core 1
+  xTaskCreatePinnedToCore(orchestratorTask, "OrchestratorTask", 2048, NULL, 1, NULL, 1);
 
   // Lancement des tâches Matérielles sur le Core 1
   xTaskCreatePinnedToCore(displayTask, "DisplayTask", 4096, NULL, 1, NULL, 1);

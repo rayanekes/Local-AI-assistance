@@ -3,6 +3,7 @@
 
 // Variables externes FreeRTOS définies dans main.cpp
 extern QueueHandle_t emotionQueue;
+extern QueueHandle_t commandQueue;
 extern QueueHandle_t audioTxQueue;
 
 // Définition de l'instance statique
@@ -11,15 +12,8 @@ WebSocketsClient Network_WS::webSocket;
 void Network_WS::initWiFi(const char* ssid, const char* password) {
     Serial.print("Connexion au Wi-Fi ");
     Serial.println(ssid);
-
+    // [Correction] Amorcer la connexion sans bloquer infiniment avec un "while"
     WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        Serial.print(".");
-    }
-    Serial.println("\nWi-Fi connecté !");
-    Serial.print("IP: ");
-    Serial.println(WiFi.localIP());
 }
 
 void Network_WS::initWebSocket(const char* server_ip, uint16_t server_port) {
@@ -30,6 +24,12 @@ void Network_WS::initWebSocket(const char* server_ip, uint16_t server_port) {
 }
 
 void Network_WS::loop() {
+    // [Correction] Maintenir le Wi-Fi en vie (Reconnexion persistante non-bloquante)
+    if (WiFi.status() != WL_CONNECTED) {
+        // Optionnel: On pourrait ajouter un timer non bloquant pour tenter WiFi.reconnect()
+        // Mais en général, WiFi.begin gère la reconnexion auto dans le background sur ESP32.
+        return;
+    }
     webSocket.loop();
 }
 
@@ -45,6 +45,18 @@ void Network_WS::handleJsonMessage(uint8_t * payload) {
         Serial.print("Erreur de parsing JSON depuis WS: ");
         Serial.println(error.c_str());
         return;
+    }
+
+    // --- Gestion des commandes (Dual-State Machine) ---
+    if (doc.containsKey("command")) {
+        const char* command = doc["command"];
+        char cmdToSend[32];
+        strncpy(cmdToSend, command, sizeof(cmdToSend) - 1);
+        cmdToSend[sizeof(cmdToSend) - 1] = '\0';
+
+        if (commandQueue != NULL) {
+            xQueueSend(commandQueue, &cmdToSend, 0);
+        }
     }
 
     // --- Gestion de l'affichage (Émotions normales) ---
