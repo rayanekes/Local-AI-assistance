@@ -22,6 +22,29 @@ QueueHandle_t emotionQueue;
 QueueHandle_t audioTxQueue; // Serveur -> ESP32 (Haut-parleur)
 QueueHandle_t audioRxQueue; // ESP32 (Micro) -> Serveur
 
+// --- Architecture Dual-State (Machine à États) ---
+enum SystemState {
+  OFFLINE_MP3, // Mode 1: Serveur IA injoignable. Lecteur MP3 Autonome (Carte SD -> I2S_1). Interface manuelle.
+  ONLINE_AI    // Mode 2: Serveur IA connecté. Full-Duplex WebSockets (I2S_0 + I2S_1). Interface "Visage/Émotions".
+};
+SystemState currentState = OFFLINE_MP3;
+
+/*
+ * [JUSTIFICATION ARCHITECTURALE - JULES]
+ * Décision concernant la librairie GUI pour le Mode MP3 (OFFLINE_MP3) :
+ * -> OPTION A (TFT_eSPI pure) validée.
+ *
+ * Explication:
+ * Bien que LVGL (Option B) soit plus esthétique, elle alloue dynamiquement des dizaines de Ko de RAM pour
+ * ses buffers de dessin et ses arbres d'objets (Widgets). L'ESP32 ne disposant que de 520 Ko de SRAM statique,
+ * jongler entre la destruction totale d'une interface LVGL et le démarrage des buffers I2S DMA + WebSockets
+ * (MbedTLS) lors d'un basculement d'état risque très fortement de causer une fragmentation fatale du tas (Heap Fragmentation).
+ *
+ * En dessinant l'interface MP3 à la main avec TFT_eSPI (fillRoundRect, drawString), nous consommons 0 Ko
+ * de RAM en mémoire persistante. Le nettoyage ("nettoyage strict") se résume à un simple `tft.fillScreen(BLACK)`
+ * avant de lancer la boucle d'images BMP pour le mode IA. C'est la seule architecture garantie "Memory-Leak Free" ici.
+ */
+
 // Variables globales pour stocker l'état visuel
 String currentEmotion = "";
 bool isSpeaking = false;
