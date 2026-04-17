@@ -268,11 +268,15 @@ async def handle_esp32_connection(websocket):
         except Exception:
             pass
 
-    def transcribe_audio(wav_path):
+    def transcribe_audio(audio_array):
+        """
+        Transcrit directement à partir d'un tableau numpy (float32).
+        Évite les écritures/lectures disque inutiles.
+        """
         custom_vocab = "Terminale STE, ADC, ATC, PE, Transmettre, ESP32."
         prompt_darija_tech = f"Bonjour. Kidayr labas? Wach nbedaw l'installation dial le serveur? {custom_vocab}"
         segments, _ = whisper.transcribe(
-            wav_path,
+            audio_array,
             task="translate",
             beam_size=5, # Plus grand beam_size pour plus de précision
             initial_prompt=prompt_darija_tech
@@ -408,8 +412,9 @@ async def handle_esp32_connection(websocket):
                             is_speaking = False
 
                             audio_data = np.concatenate(audio_buffer)
-                            await asyncio.to_thread(wav.write, INPUT_WAV, SAMPLE_RATE_MIC, audio_data)
-                            text = await asyncio.to_thread(transcribe_audio, INPUT_WAV)
+                            # Conversion immédiate en float32 pour Whisper, évitant l'écriture sur disque
+                            audio_float = audio_data.astype(np.float32) / 32768.0
+                            text = await asyncio.to_thread(transcribe_audio, audio_float)
 
                             if text:
                                 asyncio.create_task(run_llm_and_tts(text))
