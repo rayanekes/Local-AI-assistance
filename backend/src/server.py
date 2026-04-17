@@ -4,13 +4,8 @@ import asyncio
 import websockets
 import re
 import numpy as np
-import torch
 import scipy.io.wavfile as wav
 from collections import deque
-
-from faster_whisper import WhisperModel
-from silero_vad import load_silero_vad, get_speech_timestamps
-from llama_cpp import Llama
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -81,61 +76,21 @@ import shutil
 PIPER_BIN = "piper" # Utilise la commande pip globale (piper-tts)
 PIPER_MODEL = os.path.join(BASE_DIR, "piper", "fr_FR-siwis-medium.onnx")
 
-memoire_dynamique = charger_memoire()
-
-SYSTEM_PROMPT = (
-    "You are an interactive engineering robot assistant. "
-    f"Here is what you know about the user so far: {memoire_dynamique}\n"
-    "The user's input will be provided in English (translated from Moroccan Darija and French). "
-    "You must understand perfectly, BUT you MUST reply ONLY in pure and natural French. "
-    "Never generate words in Arabic or English in your spoken response. "
-    "You also control a hardware system with an ILI9341 TFT screen. "
-    "You MUST ALWAYS respond with a strictly valid JSON object in the following format:\n"
-    "{\n"
-    "  \"speech\": \"Texte en français pur pour le robot.\",\n"
-    "  \"emotion\": \"joie|neutre|triste\",\n"
-    "  \"gpio_commands\": [{\"pin\": 4, \"state\": true}]\n"
-    "}\n"
-    "Return NOTHING except the valid JSON."
-)
-
-conversation_history = [{"role": "system", "content": SYSTEM_PROMPT}]
+# Global variables for models and history
+whisper = None
+llm = None
+vad_model = None
+conversation_history = []
 
 # =========================
-# INITIALISATION ML PARALLÈLE
+# INITIALISATION ML
 # =========================
 
 import sys
 import concurrent.futures
 
-# Détermination automatique du bon fichier LLM à charger
-if os.path.exists(LLM_MODEL_PATH_SPLIT):
-    actual_llm_path = LLM_MODEL_PATH_SPLIT
-elif os.path.exists(LLM_MODEL_PATH):
-    actual_llm_path = LLM_MODEL_PATH
-else:
-    print(f"\n❌ ERREUR CRITIQUE : Modèle IA (GGUF) introuvable dans '{MODELS_DIR}'.")
-    print(f"-> Veuillez y placer '{os.path.basename(LLM_MODEL_PATH)}' OU '{os.path.basename(LLM_MODEL_PATH_SPLIT)}'.")
-    sys.exit(1)
-
-if not shutil.which(PIPER_BIN):
-    print("\n❌ ERREUR CRITIQUE : Exécutable système 'piper' introuvable.")
-    print("-> Assurez-vous d'avoir exécuté : pip install piper-tts")
-    sys.exit(1)
-
-if not os.path.exists(PIPER_MODEL):
-    print(f"\n❌ ERREUR CRITIQUE : Modèle de voix introuvable dans '{PIPER_MODEL}'.")
-    print("-> Veuillez placer 'fr_FR-siwis-medium.onnx' dans le dossier 'backend/piper/'.")
-    sys.exit(1)
-
-if not os.path.exists(PIPER_MODEL + ".json"):
-    print(f"\n❌ ERREUR CRITIQUE : Fichier de configuration phonétique Piper introuvable.")
-    print(f"Le fichier attendu est : '{PIPER_MODEL}.json'.")
-    sys.exit(1)
-
-print("⏳ Chargement des modèles IA en parallèle...")
-
 def load_whisper():
+    from faster_whisper import WhisperModel
     try:
         # Utilisation de int8_float16 pour réduire considérablement la VRAM de Whisper (garde Whisper rapide sur GPU)
         model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type="int8_float16")
@@ -146,7 +101,8 @@ def load_whisper():
         print("⚠️ Whisper chargé (CPU)")
         return model
 
-def load_llama():
+def load_llama(actual_llm_path):
+    from llama_cpp import Llama
     try:
         # Vérification interne pour savoir si CUDA est réellement activé dans llama.cpp
         import llama_cpp
@@ -175,19 +131,10 @@ def load_llama():
         sys.exit(1)
 
 def load_vad():
+    from silero_vad import load_silero_vad
     model = load_silero_vad()
     print("✅ Silero VAD chargé")
     return model
-
-# Lancer le chargement dans 3 threads parallèles (Diminue la latence de démarrage (I/O))
-with concurrent.futures.ThreadPoolExecutor() as executor:
-    future_whisper = executor.submit(load_whisper)
-    future_llama = executor.submit(load_llama)
-    future_vad = executor.submit(load_vad)
-
-    whisper = future_whisper.result()
-    llm = future_llama.result()
-    vad_model = future_vad.result()
 
 # =========================
 # OUTILS
@@ -368,6 +315,8 @@ async def handle_esp32_connection(websocket):
             conversation_history.append({"role": "assistant", "content": full_llm_response})
             asyncio.create_task(synthese_memoire_background(transcribed_text, llm))
 
+    import torch
+    from silero_vad import get_speech_timestamps
     try:
         async for message in websocket:
             if type(message) is bytes:
@@ -421,7 +370,67 @@ async def handle_esp32_connection(websocket):
 
 
 async def main():
+    global whisper, llm, vad_model, conversation_history
+
+    # Détermination automatique du bon fichier LLM à charger
+    if os.path.exists(LLM_MODEL_PATH_SPLIT):
+        actual_llm_path = LLM_MODEL_PATH_SPLIT
+    elif os.path.exists(LLM_MODEL_PATH):
+        actual_llm_path = LLM_MODEL_PATH
+    else:
+        print(f"\n❌ ERREUR CRITIQUE : Modèle IA (GGUF) introuvable dans '{MODELS_DIR}'.")
+        print(f"-> Veuillez y placer '{os.path.basename(LLM_MODEL_PATH)}' OU '{os.path.basename(LLM_MODEL_PATH_SPLIT)}'.")
+        sys.exit(1)
+
+    if not shutil.which(PIPER_BIN):
+        print("\n❌ ERREUR CRITIQUE : Exécutable système 'piper' introuvable.")
+        print("-> Assurez-vous d'avoir exécuté : pip install piper-tts")
+        sys.exit(1)
+
+    if not os.path.exists(PIPER_MODEL):
+        print(f"\n❌ ERREUR CRITIQUE : Modèle de voix introuvable dans '{PIPER_MODEL}'.")
+        print("-> Veuillez placer 'fr_FR-siwis-medium.onnx' dans le dossier 'backend/piper/'.")
+        sys.exit(1)
+
+    if not os.path.exists(PIPER_MODEL + ".json"):
+        print(f"\n❌ ERREUR CRITIQUE : Fichier de configuration phonétique Piper introuvable.")
+        print(f"Le fichier attendu est : '{PIPER_MODEL}.json'.")
+        sys.exit(1)
+
+    print("⏳ Chargement des modèles IA en parallèle...")
+
+    # Lancer le chargement dans 3 threads parallèles (Diminue la latence de démarrage (I/O))
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future_whisper = executor.submit(load_whisper)
+        future_llama = executor.submit(load_llama, actual_llm_path)
+        future_vad = executor.submit(load_vad)
+
+        whisper = future_whisper.result()
+        llm = future_llama.result()
+        vad_model = future_vad.result()
+
+    memoire_dynamique = charger_memoire()
+
+    system_prompt_content = (
+        "You are an interactive engineering robot assistant. "
+        f"Here is what you know about the user so far: {memoire_dynamique}\n"
+        "The user's input will be provided in English (translated from Moroccan Darija and French). "
+        "You must understand perfectly, BUT you MUST reply ONLY in pure and natural French. "
+        "Never generate words in Arabic or English in your spoken response. "
+        "You also control a hardware system with an ILI9341 TFT screen. "
+        "You MUST ALWAYS respond with a strictly valid JSON object in the following format:\n"
+        "{\n"
+        "  \"speech\": \"Texte en français pur pour le robot.\",\n"
+        "  \"emotion\": \"joie|neutre|triste\",\n"
+        "  \"gpio_commands\": [{\"pin\": 4, \"state\": true}]\n"
+        "}\n"
+        "Return NOTHING except the valid JSON."
+    )
+
+    conversation_history = [{"role": "system", "content": system_prompt_content}]
+
     async with websockets.serve(handle_esp32_connection, "0.0.0.0", 8765):
+        print("🚀 Serveur démarré sur ws://0.0.0.0:8765")
         await asyncio.Future()
 
 if __name__ == "__main__":
