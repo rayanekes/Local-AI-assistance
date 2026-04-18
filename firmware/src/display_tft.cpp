@@ -25,8 +25,39 @@ void TFT_Display::init() {
 void TFT_Display::displayEmotion(String emotion, int frame) {
   // Construit le chemin avec le numéro de frame (ex: "/joie_1.bmp")
   String bmpPath = "/" + emotion + "_" + String(frame) + ".bmp";
-  tft.fillScreen(TFT_BLACK); // Nettoyer l'écran avant d'afficher
+  // Ne pas nettoyer l'écran pour éviter le scintillement (flickering)
   drawBmp(bmpPath.c_str(), 0, 0);
+}
+
+void TFT_Display::drawVoiceVisualizer(int micLevel, int speakerLevel, bool isSpeaking) {
+  // Configurer la zone d'affichage du visualiseur (en bas de l'écran)
+  int yOffset = tft.height() - 20;
+  int barHeight = 10;
+  int maxWidth = tft.width() - 40;
+
+  int w = 0;
+  uint16_t color = TFT_BLACK;
+
+  if (isSpeaking) {
+    w = map(speakerLevel, 0, 100, 0, maxWidth);
+    color = TFT_BLUE;
+  } else {
+    w = map(micLevel, 0, 100, 0, maxWidth);
+    color = TFT_GREEN;
+  }
+
+  if (w > maxWidth) w = maxWidth;
+
+  // Dessiner la partie colorée
+  tft.fillRect(20, yOffset, w, barHeight, color);
+
+  // Dessiner la partie restante en noir (pour effacer sans scintillement)
+  if (w < maxWidth) {
+    tft.fillRect(20 + w, yOffset, maxWidth - w, barHeight, TFT_BLACK);
+  }
+
+  // Dessiner un contour
+  tft.drawRect(20, yOffset, maxWidth, barHeight, TFT_WHITE);
 }
 
 void TFT_Display::drawBmp(const char *filename, int16_t x, int16_t y) {
@@ -62,28 +93,45 @@ void TFT_Display::drawBmp(const char *filename, int16_t x, int16_t y) {
 
       uint16_t padding = (4 - ((w * 3) & 3)) & 3;
 
-      // Allocation du buffer de lecture (SD) et du buffer de couleurs (TFT)
-      uint8_t* lineBuffer = (uint8_t*)malloc(w * 3 + padding);
-      uint16_t* colorBuffer = (uint16_t*)malloc(w * sizeof(uint16_t));
+      // Utiliser des blocs de lignes pour optimiser la lecture SD et les écritures SPI
+      const uint8_t chunkLines = 8; // On lit 8 lignes à la fois si la mémoire le permet
+      uint32_t lineBytes = w * 3 + padding;
+      uint32_t chunkBytes = lineBytes * chunkLines;
+
+      uint8_t* lineBuffer = (uint8_t*)malloc(chunkBytes);
+      uint16_t* colorBuffer = (uint16_t*)malloc(w * chunkLines * sizeof(uint16_t));
 
       if (lineBuffer != NULL && colorBuffer != NULL) {
-        // Définir la zone de dessin pour utiliser pushColors (optimisation DMA/SPI)
+        // En mode swap_bytes si nécessaire, pushImage peut être plus rapide
         tft.setWindow(x, y, x + w - 1, y + h - 1);
+        tft.setSwapBytes(true);
 
-        for (row = 0; row < h; row++) {
-          bmpFS.read(lineBuffer, w * 3 + padding);
+        for (row = 0; row < h; row += chunkLines) {
+          uint8_t currentChunkLines = (row + chunkLines > h) ? (h - row) : chunkLines;
+          bmpFS.read(lineBuffer, lineBytes * currentChunkLines);
+
           uint8_t* bptr = lineBuffer;
+          uint16_t* cptr = colorBuffer;
 
-          for (col = 0; col < w; col++) {
-            b = *bptr++;
-            g = *bptr++;
-            r = *bptr++;
-            colorBuffer[col] = tft.color565(r, g, b);
+          // BMP est lu du bas vers le haut
+          for (uint8_t l = 0; l < currentChunkLines; l++) {
+            for (col = 0; col < w; col++) {
+              b = *bptr++;
+              g = *bptr++;
+              r = *bptr++;
+              *cptr++ = tft.color565(r, g, b);
+            }
+            // Skip padding at the end of the line
+            bptr += padding;
           }
-          // Pousser la ligne complète vers l'écran de bas en haut (format BMP)
-          // Note : TFT_eSPI n'a pas de pushColors inversé pour Y, on utilise pushImage par ligne
-          tft.pushImage(x, y + h - 1 - row, w, 1, colorBuffer);
+
+          // pushImage peut pousser un bloc, mais BMP a les lignes inversées.
+          // On doit l'écrire de bas en haut ligne par ligne pour éviter de complexifier le buffer.
+          for (uint8_t l = 0; l < currentChunkLines; l++) {
+            tft.pushImage(x, y + h - 1 - (row + l), w, 1, &colorBuffer[l * w]);
+          }
         }
+        tft.setSwapBytes(false); // Restore
         free(lineBuffer);
         free(colorBuffer);
       } else {

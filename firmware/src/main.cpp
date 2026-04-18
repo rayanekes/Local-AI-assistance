@@ -66,6 +66,28 @@ void destroy_lvgl_mp3_app() {
 String currentEmotion = "";
 bool isSpeaking = false;
 
+// Variables pour les niveaux audio
+volatile int currentMicLevel = 0;
+volatile int currentSpeakerLevel = 0;
+
+// Fonction utilitaire pour calculer le RMS d'un buffer audio
+int calculateRMS(int16_t* buffer, size_t numSamples) {
+  if (numSamples == 0) return 0;
+
+  int64_t sumSquares = 0;
+  for (size_t i = 0; i < numSamples; i++) {
+    sumSquares += (int64_t)buffer[i] * buffer[i];
+  }
+
+  int32_t rms = sqrt(sumSquares / numSamples);
+
+  // Mapping rudimentaire pour avoir une valeur de 0 à 100
+  // Le niveau max dépend du volume, on ajuste empiriquement (ex: max RMS 10000)
+  int level = map(rms, 0, 5000, 0, 100);
+  if (level > 100) level = 100;
+  return level;
+}
+
 // ==========================================
 // TÂCHES FREERTOS
 // ==========================================
@@ -152,6 +174,11 @@ void displayTask(void *pvParameters) {
         lastAnimTime = millis();
       }
     }
+
+    // Mettre à jour le visualiseur vocal en continu
+    if (currentState == ONLINE_AI) {
+      display.drawVoiceVisualizer(currentMicLevel, currentSpeakerLevel, isSpeaking);
+    }
   }
 }
 
@@ -202,6 +229,9 @@ void micTask(void *pvParameters) {
         chunk.data = (uint8_t*)micBuffer;
         chunk.length = bytesRead;
 
+        // Calculer le niveau RMS du micro
+        currentMicLevel = calculateRMS(micBuffer, bytesRead / sizeof(int16_t));
+
         // Envoyer à networkTask de manière sécurisée
         if (xQueueSend(audioRxQueue, &chunk, 0) != pdPASS) {
           free(micBuffer); // Queue pleine = on drop le paquet
@@ -221,13 +251,20 @@ void speakerTask(void *pvParameters) {
   AudioChunk txChunk;
 
   for (;;) {
-    // Attendre qu'un paquet audio arrive depuis le réseau
-    if (xQueueReceive(audioTxQueue, &txChunk, portMAX_DELAY) == pdPASS) {
+    // Attendre qu'un paquet audio arrive depuis le réseau avec un timeout pour l'animation
+    if (xQueueReceive(audioTxQueue, &txChunk, 10 / portTICK_PERIOD_MS) == pdPASS) {
       if (txChunk.data != NULL) {
+        // Calculer le niveau RMS du haut-parleur
+        currentSpeakerLevel = calculateRMS((int16_t*)txChunk.data, txChunk.length / sizeof(int16_t));
+
         // Écrire la taille exacte reçue du serveur
         audio.writeSpeaker(txChunk.data, txChunk.length);
         free(txChunk.data);
       }
+    } else {
+      // Si on ne reçoit rien, le niveau descend progressivement
+      if (currentSpeakerLevel > 0) currentSpeakerLevel -= 5;
+      if (currentSpeakerLevel < 0) currentSpeakerLevel = 0;
     }
   }
 }

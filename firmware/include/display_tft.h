@@ -13,6 +13,7 @@ public:
     TFT_Display();
     void init();
     void displayEmotion(String emotion, int frame);
+    void drawVoiceVisualizer(int micLevel, int speakerLevel, bool isSpeaking);
 
 private:
     TFT_eSPI tft;
