@@ -13,6 +13,7 @@ public:
     TFT_Display();
     void init();
     void displayEmotion(String emotion, int frame);
+    bool getTouch(uint16_t *x, uint16_t *y);
 
 private:
     TFT_eSPI tft;

@@ -114,19 +114,30 @@ void Network_WS::webSocketEvent(WStype_t type, uint8_t * payload, size_t length)
         case WStype_BIN:
             // Le serveur a envoyé de l'audio TTS
             if (audioTxQueue != NULL) {
-                // Allouer la mémoire pour le payload
-                uint8_t* audioData = (uint8_t*)malloc(length);
-                if (audioData != NULL) {
-                    memcpy(audioData, payload, length);
+                extern QueueHandle_t spkFreeQueue; // Accès à la free queue
+                uint8_t* audioData = NULL;
 
-                    // Créer la structure contenant le pointeur et la taille
-                    AudioChunk chunk;
-                    chunk.data = audioData;
-                    chunk.length = length;
+                size_t offset = 0;
+                while (offset < length) {
+                    uint8_t* audioData = NULL;
+                    if (xQueueReceive(spkFreeQueue, &audioData, 0) == pdPASS) {
+                        size_t remaining = length - offset;
+                        size_t copyLength = remaining > SPK_BUFFER_SIZE ? SPK_BUFFER_SIZE : remaining;
+                        memcpy(audioData, payload + offset, copyLength);
 
-                    if (xQueueSend(audioTxQueue, &chunk, 0) != pdPASS) {
-                        free(audioData);
-                        Serial.println("[WS] Erreur: audioTxQueue pleine !");
+                        AudioChunk chunk;
+                        chunk.data = audioData;
+                        chunk.length = copyLength;
+
+                        if (xQueueSend(audioTxQueue, &chunk, 0) != pdPASS) {
+                            xQueueSend(spkFreeQueue, &audioData, 0);
+                            Serial.println("[WS] Erreur: audioTxQueue pleine !");
+                            break;
+                        }
+                        offset += copyLength;
+                    } else {
+                        Serial.println("[WS] Erreur: Plus de buffers disponibles pour audioTxQueue !");
+                        break;
                     }
                 }
             }

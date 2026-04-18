@@ -12,6 +12,10 @@ void TFT_Display::init() {
   tft.setCursor(10, 10);
   tft.println("Robot AI Booting...");
 
+  // Touch calibration if necessary (can be skipped for simple "invisible" screen-wide button)
+  uint16_t calData[5] = { 275, 3620, 264, 3532, 1 };
+  tft.setTouch(calData);
+
   // Initialisation de la carte SD
   if (!SD.begin(SD_CS)) {
     Serial.println("Erreur: Carte SD introuvable ou erreur SPI.");
@@ -20,6 +24,10 @@ void TFT_Display::init() {
     Serial.println("Carte SD initialisée.");
     tft.println("SD OK!");
   }
+}
+
+bool TFT_Display::getTouch(uint16_t *x, uint16_t *y) {
+  return tft.getTouch(x, y);
 }
 
 void TFT_Display::displayEmotion(String emotion, int frame) {
