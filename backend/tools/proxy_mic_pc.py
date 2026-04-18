@@ -71,8 +71,9 @@ async def handle_esp32(esp_websocket):
         print("🔌 [Proxy] ESP32 Déconnecté.")
 
 async def main():
+    import socket
     print(f"🚀 Démarrage du Proxy Micro PC sur le port {PROXY_PORT}...")
-    async with websockets.serve(handle_esp32, "0.0.0.0", PROXY_PORT):
+    async with websockets.serve(handle_esp32, "0.0.0.0", PROXY_PORT, family=socket.AF_INET, reuse_address=True, reuse_port=True):
         await asyncio.Future()
 
 if __name__ == "__main__":

@@ -450,7 +450,8 @@ async def handle_esp32_connection(websocket):
 
 
 async def main():
-    async with websockets.serve(handle_esp32_connection, "0.0.0.0", 8765):
+    import socket
+    async with websockets.serve(handle_esp32_connection, "0.0.0.0", 8765, family=socket.AF_INET, reuse_address=True, reuse_port=True):
         await asyncio.Future()
 
 if __name__ == "__main__":
