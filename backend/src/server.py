@@ -449,9 +449,49 @@ async def handle_esp32_connection(websocket):
         pass
 
 
+WS_AUTH_TOKEN = os.getenv("WS_AUTH_TOKEN", "supersecrettoken")
+
+async def process_auth(*args, **kwargs):
+    """
+    Hook to authenticate WebSocket clients before connection upgrades.
+    Compatible with both legacy (v13-) and asyncio (v14+) `websockets` APIs.
+    """
+    import http
+
+    headers = None
+    if len(args) == 2:
+        # Check if v13- signature: process_request(path, request_headers)
+        if isinstance(args[0], str):
+            headers = args[1]
+        # Otherwise v14+ signature: process_request(server_connection, request)
+        else:
+            headers = args[1].headers
+
+    auth_header = headers.get("Authorization", "") if headers else ""
+    expected = f"Bearer {WS_AUTH_TOKEN}"
+
+    if auth_header != expected:
+        # Legacy API expects a tuple (status, headers, body)
+        if len(args) == 2 and isinstance(args[0], str):
+            return (http.HTTPStatus.UNAUTHORIZED, {}, b"Unauthorized\n")
+        # v14+ API expects a websockets.http11.Response object
+        else:
+            from websockets.http11 import Response
+            return Response(http.HTTPStatus.UNAUTHORIZED, "Unauthorized", [], b"Unauthorized\n")
+
+    return None
+
 async def main():
     import socket
-    async with websockets.serve(handle_esp32_connection, "0.0.0.0", 8765, family=socket.AF_INET, reuse_address=True, reuse_port=True):
+    async with websockets.serve(
+        handle_esp32_connection,
+        "0.0.0.0",
+        8765,
+        family=socket.AF_INET,
+        reuse_address=True,
+        reuse_port=True,
+        process_request=process_auth
+    ):
         await asyncio.Future()
 
 if __name__ == "__main__":

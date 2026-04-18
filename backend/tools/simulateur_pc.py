@@ -1,10 +1,13 @@
+import os
 import asyncio
 import websockets
 import sounddevice as sd
 import numpy as np
 import json
+import inspect
 
 SERVER_URI = "ws://127.0.0.1:8765"
+WS_AUTH_TOKEN = os.getenv("WS_AUTH_TOKEN", "supersecrettoken")
 MIC_SAMPLE_RATE = 16000
 SPK_SAMPLE_RATE = 22050
 CHUNK_SIZE = 1024
@@ -50,9 +53,19 @@ async def message_receiver(websocket):
                 except json.JSONDecodeError:
                     print(f"Message texte non-JSON: {message}")
 
+def get_connect_kwargs(headers):
+    kwargs = {}
+    sig = inspect.signature(websockets.connect)
+    if "additional_headers" in sig.parameters:
+        kwargs["additional_headers"] = headers
+    else:
+        kwargs["extra_headers"] = headers
+    return kwargs
+
 async def main():
     try:
-        async with websockets.connect(SERVER_URI) as websocket:
+        headers = {"Authorization": f"Bearer {WS_AUTH_TOKEN}"}
+        async with websockets.connect(SERVER_URI, **get_connect_kwargs(headers)) as websocket:
             print(f"✅ Connecté au serveur {SERVER_URI}")
 
             # Lancer l'envoi et la réception en parallèle
