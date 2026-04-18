@@ -23,6 +23,7 @@ public:
 private:
     static WebSocketsClient webSocket;
     static void handleJsonMessage(uint8_t * payload);
+    static String authHeader;
 };
 
 #endif // NETWORK_WS_H

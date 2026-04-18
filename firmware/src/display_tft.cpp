@@ -7,93 +7,62 @@ void TFT_Display::init() {
   tft.init();
   tft.setRotation(1); // Format paysage
   tft.fillScreen(TFT_BLACK);
+
+  // Calibration touch data based on audit: {282, 3617, 336, 3458, 4}
+  uint16_t calData[5] = {282, 3617, 336, 3458, 4};
+  tft.setTouch(calData);
+
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
   tft.setCursor(10, 10);
   tft.println("Robot AI Booting...");
 
-  // Initialisation de la carte SD
-  if (!SD.begin(SD_CS)) {
-    Serial.println("Erreur: Carte SD introuvable ou erreur SPI.");
-    tft.println("Erreur SD!");
-  } else {
-    Serial.println("Carte SD initialisée.");
-    tft.println("SD OK!");
-  }
+  delay(500); // Give it a moment to display booting
 }
 
 void TFT_Display::displayEmotion(String emotion, int frame) {
-  // Construit le chemin avec le numéro de frame (ex: "/joie_1.bmp")
-  String bmpPath = "/" + emotion + "_" + String(frame) + ".bmp";
+  // Vector engine rendering for emotions
   tft.fillScreen(TFT_BLACK); // Nettoyer l'écran avant d'afficher
-  drawBmp(bmpPath.c_str(), 0, 0);
+
+  int eyeWidth = 40;
+  int eyeHeight = 60;
+  int mouthWidth = 100;
+  int mouthHeight = 10;
+  int mouthOffset = 20;
+
+  if (emotion == "joie") {
+    eyeHeight = 40; // Squinted eyes
+    mouthHeight = 30; // Open mouth
+    mouthOffset = 10;
+  } else if (emotion == "triste") {
+    eyeHeight = 50; // Droopy eyes
+    mouthHeight = 10; // Flat or frown
+    mouthOffset = 30;
+  } else if (emotion == "parle") {
+    // Animate mouth based on frame
+    mouthHeight = (frame % 2 == 0) ? 40 : 10;
+  } else if (emotion == "reflexion") {
+    // Animate eyes based on frame
+    eyeHeight = (frame % 2 == 0) ? 60 : 20; // Blinking
+  } else {
+    // Neutre
+    eyeHeight = 60;
+    mouthHeight = 10;
+  }
+
+  drawFace(eyeWidth, eyeHeight, mouthWidth, mouthHeight, mouthOffset);
 }
 
-void TFT_Display::drawBmp(const char *filename, int16_t x, int16_t y) {
-  if ((x >= tft.width()) || (y >= tft.height())) return;
+void TFT_Display::drawFace(int eyeWidth, int eyeHeight, int mouthWidth, int mouthHeight, int mouthOffset) {
+  int centerX = tft.width() / 2;
+  int centerY = tft.height() / 2;
 
-  File bmpFS;
-  bmpFS = SD.open(filename, "r");
+  // Draw left eye
+  tft.fillSmoothRoundRect(centerX - 80 - eyeWidth/2, centerY - 40 - eyeHeight/2, eyeWidth, eyeHeight, 10, TFT_WHITE, TFT_BLACK);
 
-  if (!bmpFS) {
-    Serial.print("File not found: ");
-    Serial.println(filename);
-    return;
-  }
+  // Draw right eye
+  tft.fillSmoothRoundRect(centerX + 80 - eyeWidth/2, centerY - 40 - eyeHeight/2, eyeWidth, eyeHeight, 10, TFT_WHITE, TFT_BLACK);
 
-  uint32_t seekOffset;
-  uint16_t w, h, row, col;
-  uint8_t  r, g, b;
-
-  if (bmpFS.read() == 'B' && bmpFS.read() == 'M') {
-    bmpFS.read(); bmpFS.read(); bmpFS.read(); bmpFS.read();
-    bmpFS.read(); bmpFS.read(); bmpFS.read(); bmpFS.read();
-    seekOffset = bmpFS.read() | (bmpFS.read() << 8) | (bmpFS.read() << 16) | (bmpFS.read() << 24);
-    bmpFS.read(); bmpFS.read(); bmpFS.read(); bmpFS.read();
-
-    w = bmpFS.read() | (bmpFS.read() << 8) | (bmpFS.read() << 16) | (bmpFS.read() << 24);
-    h = bmpFS.read() | (bmpFS.read() << 8) | (bmpFS.read() << 16) | (bmpFS.read() << 24);
-
-    bmpFS.read(); bmpFS.read();
-    uint16_t depth = bmpFS.read() | (bmpFS.read() << 8);
-
-    if (depth == 24) {
-      bmpFS.seek(seekOffset);
-
-      uint16_t padding = (4 - ((w * 3) & 3)) & 3;
-
-      // Allocation du buffer de lecture (SD) et du buffer de couleurs (TFT)
-      uint8_t* lineBuffer = (uint8_t*)malloc(w * 3 + padding);
-      uint16_t* colorBuffer = (uint16_t*)malloc(w * sizeof(uint16_t));
-
-      if (lineBuffer != NULL && colorBuffer != NULL) {
-        // Définir la zone de dessin pour utiliser pushColors (optimisation DMA/SPI)
-        tft.setWindow(x, y, x + w - 1, y + h - 1);
-
-        for (row = 0; row < h; row++) {
-          bmpFS.read(lineBuffer, w * 3 + padding);
-          uint8_t* bptr = lineBuffer;
-
-          for (col = 0; col < w; col++) {
-            b = *bptr++;
-            g = *bptr++;
-            r = *bptr++;
-            colorBuffer[col] = tft.color565(r, g, b);
-          }
-          // Pousser la ligne complète vers l'écran de bas en haut (format BMP)
-          // Note : TFT_eSPI n'a pas de pushColors inversé pour Y, on utilise pushImage par ligne
-          tft.pushImage(x, y + h - 1 - row, w, 1, colorBuffer);
-        }
-        free(lineBuffer);
-        free(colorBuffer);
-      } else {
-        if (lineBuffer) free(lineBuffer);
-        if (colorBuffer) free(colorBuffer);
-        Serial.println("Erreur d'allocation mémoire pour le buffer BMP");
-      }
-    } else {
-      Serial.println("BMP format not supported.");
-    }
-  }
-  bmpFS.close();
+  // Draw mouth
+  tft.fillSmoothRoundRect(centerX - mouthWidth/2, centerY + 60 + mouthOffset - mouthHeight/2, mouthWidth, mouthHeight, 5, TFT_WHITE, TFT_BLACK);
 }

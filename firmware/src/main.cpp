@@ -5,6 +5,7 @@
 #include "audio_i2s.h"
 #include "network_ws.h"
 #include "audio_chunk.h"
+#include <lvgl.h>
 
 // --- Configuration Wi-Fi et Serveur ---
 const char* ssid = "VOTRE_SSID";
@@ -33,33 +34,123 @@ SystemState currentState = ONLINE_AI;
 // Nouvelle Queue pour le changement d'état "Dual-State"
 QueueHandle_t commandQueue;
 
-/*
- * [RÉVISION ARCHITECTURALE - JULES]
- * Décision concernant la librairie GUI pour le Mode MP3 (OFFLINE_MP3) :
- * -> LVGL (Option B) APPROUVÉE SOUS CONDITION DE "TEARDOWN" STRICT.
- *
- * Explication:
- * Suite à l'analyse de l'utilisateur, l'utilisation de LVGL est acceptée.
- * Pour éviter la saturation des 520 Ko de RAM de l'ESP32, nous allons implémenter un "Teardown" dynamique (Allocation/Désallocation totale).
- *
- * Fonctionnement :
- * 1. Le mode "ONLINE_AI" est le mode par défaut.
- * 2. Si l'utilisateur demande la musique au serveur IA, le serveur envoie un JSON : {"command": "start_mp3"}.
- * 3. L'ESP32 reçoit la commande, suspend les tâches I2S Microphone (désallocation des buffers), et alloue dynamiquement
- *    la mémoire de LVGL (lv_init) pour charger la "Mini App Lecteur".
- * 4. Lorsque le Wi-Fi se connecte (ou via un bouton "Quitter" sur le TFT), l'ESP32 déclenche un nettoyage absolu (lv_deinit() ou équivalent),
- *    libérant les ~40Ko de RAM utilisés par la GUI avant de relancer les tâches IA WebSockets.
- */
+// --- LVGL Variables ---
+static lv_disp_draw_buf_t draw_buf;
+static lv_color_t *buf1;
+static lv_disp_drv_t disp_drv;
+static lv_indev_drv_t indev_drv;
+static lv_obj_t *mp3_screen = NULL;
+
+// Display flushing function for LVGL
+void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
+    uint32_t w = (area->x2 - area->x1 + 1);
+    uint32_t h = (area->y2 - area->y1 + 1);
+
+    display.tft.startWrite();
+    display.tft.setAddrWindow(area->x1, area->y1, w, h);
+    display.tft.pushColors((uint16_t *)&color_p->full, w * h, true);
+    display.tft.endWrite();
+
+    lv_disp_flush_ready(disp);
+}
+
+// Touchpad read function for LVGL
+void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
+    uint16_t touchX, touchY;
+    bool touched = display.tft.getTouch(&touchX, &touchY);
+
+    if(!touched) {
+        data->state = LV_INDEV_STATE_REL;
+    } else {
+        data->state = LV_INDEV_STATE_PR;
+        data->point.x = touchX;
+        data->point.y = touchY;
+    }
+}
+
+// Button callback to go back to AI mode
+static void btn_exit_event_cb(lv_event_t * e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    if(code == LV_EVENT_CLICKED) {
+        // Send stop_mp3 command to orchestrator via queue
+        char cmdToSend[32] = "stop_mp3";
+        if (commandQueue != NULL) {
+            xQueueSend(commandQueue, &cmdToSend, 0);
+        }
+    }
+}
 
 // --- Fonctions de basculement d'architecture (State Machine) ---
 void load_lvgl_mp3_app() {
   Serial.println("[STATE] Basculement -> OFFLINE_MP3");
-  // TODO: malloc des buffers LVGL, init écran, création widgets
+
+  lv_init();
+
+  // Allocate display buffer dynamically
+  size_t buffer_size = display.tft.width() * 20; // 20 lines buffer
+  buf1 = (lv_color_t *)malloc(buffer_size * sizeof(lv_color_t));
+  if (!buf1) {
+      Serial.println("LVGL buffer allocation failed!");
+      return;
+  }
+
+  lv_disp_draw_buf_init(&draw_buf, buf1, NULL, buffer_size);
+
+  lv_disp_drv_init(&disp_drv);
+  disp_drv.hor_res = display.tft.width();
+  disp_drv.ver_res = display.tft.height();
+  disp_drv.flush_cb = my_disp_flush;
+  disp_drv.draw_buf = &draw_buf;
+  lv_disp_drv_register(&disp_drv);
+
+  lv_indev_drv_init(&indev_drv);
+  indev_drv.type = LV_INDEV_TYPE_POINTER;
+  indev_drv.read_cb = my_touchpad_read;
+  lv_indev_drv_register(&indev_drv);
+
+  // --- UI Spotify ---
+  mp3_screen = lv_obj_create(NULL);
+  lv_scr_load(mp3_screen);
+  lv_obj_set_style_bg_color(mp3_screen, lv_color_hex(0x121212), 0); // Spotify dark background
+
+  // Title
+  lv_obj_t * label_title = lv_label_create(mp3_screen);
+  lv_label_set_text(label_title, "Spotify Clone");
+  lv_obj_set_style_text_color(label_title, lv_color_hex(0x1DB954), 0); // Spotify green
+  // Use default font instead of missing font
+  // lv_obj_set_style_text_font(label_title, &lv_font_montserrat_20, 0);
+  lv_obj_align(label_title, LV_ALIGN_TOP_MID, 0, 10);
+
+  // Playback controls (Play, Pause, Next)
+  lv_obj_t * btn_play = lv_btn_create(mp3_screen);
+  lv_obj_align(btn_play, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(btn_play, lv_color_hex(0x1DB954), 0);
+  lv_obj_set_style_radius(btn_play, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_size(btn_play, 60, 60);
+  lv_obj_t * label_play = lv_label_create(btn_play);
+  lv_label_set_text(label_play, LV_SYMBOL_PLAY);
+  lv_obj_center(label_play);
+
+  // Exit button
+  lv_obj_t * btn_exit = lv_btn_create(mp3_screen);
+  lv_obj_align(btn_exit, LV_ALIGN_BOTTOM_MID, 0, -20);
+  lv_obj_set_style_bg_color(btn_exit, lv_color_hex(0xFF0000), 0);
+  lv_obj_add_event_cb(btn_exit, btn_exit_event_cb, LV_EVENT_ALL, NULL);
+  lv_obj_t * label_exit = lv_label_create(btn_exit);
+  lv_label_set_text(label_exit, "Exit to AI");
+  lv_obj_center(label_exit);
 }
 
 void destroy_lvgl_mp3_app() {
   Serial.println("[STATE] Basculement -> ONLINE_AI");
-  // TODO: lv_obj_del(lv_scr_act()), free des buffers, flush complet de la mémoire
+
+  if (buf1) {
+      // Complete teardown of LVGL
+      lv_deinit();
+      free(buf1);
+      buf1 = NULL;
+      mp3_screen = NULL;
+  }
 }
 
 // Variables globales pour stocker l'état visuel
@@ -107,9 +198,10 @@ void displayTask(void *pvParameters) {
   display.displayEmotion(currentEmotion, currentFrame);
 
   for (;;) {
-    // Si on est en mode MP3, on ne gère pas les visages
+    // Si on est en mode MP3, on ne gère pas les visages, on gère LVGL
     if (currentState == OFFLINE_MP3) {
-      vTaskDelay(100 / portTICK_PERIOD_MS);
+      lv_timer_handler();
+      vTaskDelay(5 / portTICK_PERIOD_MS); // LVGL timer tick
       continue;
     }
 

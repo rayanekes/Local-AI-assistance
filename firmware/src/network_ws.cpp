@@ -8,6 +8,7 @@ extern QueueHandle_t audioTxQueue;
 
 // Définition de l'instance statique
 WebSocketsClient Network_WS::webSocket;
+String Network_WS::authHeader = "";
 
 void Network_WS::initWiFi(const char* ssid, const char* password) {
     Serial.print("Connexion au Wi-Fi ");
@@ -17,6 +18,10 @@ void Network_WS::initWiFi(const char* ssid, const char* password) {
 }
 
 void Network_WS::initWebSocket(const char* server_ip, uint16_t server_port) {
+    // Inject the authentication header for handshake to avoid Errno 111
+    authHeader = "Authorization: Bearer secret_token";
+    webSocket.setExtraHeaders(authHeader.c_str());
+
     webSocket.begin(server_ip, server_port, "/");
     webSocket.onEvent(webSocketEvent);
     webSocket.setReconnectInterval(5000); // Reconnexion auto après 5s

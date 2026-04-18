@@ -13,10 +13,10 @@ public:
     TFT_Display();
     void init();
     void displayEmotion(String emotion, int frame);
+    TFT_eSPI tft; // Make tft public so main can access it for LVGL
 
 private:
-    TFT_eSPI tft;
-    void drawBmp(const char *filename, int16_t x, int16_t y);
+    void drawFace(int eyeWidth, int eyeHeight, int mouthWidth, int mouthHeight, int mouthOffset);
 };
 
 #endif // TFT_DISPLAY_H
