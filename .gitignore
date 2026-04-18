@@ -24,3 +24,4 @@ __pycache__/
 
 # Fichiers de log
 *.log
+tts_env/
