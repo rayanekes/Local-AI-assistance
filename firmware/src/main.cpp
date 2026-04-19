@@ -86,6 +86,7 @@ void orchestratorTask(void *pvParameters) {
 
         // Reset visuel
         display.init();
+        display.resetBaseDrawn();
         currentEmotion = "neutre";
         display.displayEmotion(currentEmotion, 1);
       }
@@ -138,16 +139,25 @@ void displayTask(void *pvParameters) {
       // Gestion de l'animation de l'émotion en cours
       String emotionToDisplay = isSpeaking ? "parle" : currentEmotion;
 
-      // La bouche s'anime beaucoup plus vite (200ms) que les yeux (2000ms/300ms)
+      // La bouche s'anime beaucoup plus vite (200ms) que les yeux (2000ms/300ms/300ms)
       unsigned long animDelay;
       if (isSpeaking) {
         animDelay = 200;
       } else {
-        animDelay = (currentFrame == 1) ? 2000 : 300;
+        // Frame 1 lasts long, Frame 2 (blink/transition) is fast, Frame 3 is fast
+        if (currentFrame == 1) animDelay = 2000;
+        else if (currentFrame == 2) animDelay = 300;
+        else animDelay = 300;
       }
 
       if (millis() - lastAnimTime > animDelay) {
-        currentFrame = (currentFrame == 1) ? 2 : 1;
+        currentFrame++;
+        if (currentFrame > 3) {
+          currentFrame = 1;
+        }
+
+        // For 'parle', sometimes we only want 2 frames to be rapid, but we expanded to 3
+        // So we just cycle through 1, 2, 3
         display.displayEmotion(emotionToDisplay, currentFrame);
         lastAnimTime = millis();
       }
