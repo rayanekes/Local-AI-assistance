@@ -113,21 +113,29 @@ void Network_WS::webSocketEvent(WStype_t type, uint8_t * payload, size_t length)
 
         case WStype_BIN:
             // Le serveur a envoyé de l'audio TTS
-            if (audioTxQueue != NULL) {
-                // Allouer la mémoire pour le payload
-                uint8_t* audioData = (uint8_t*)malloc(length);
-                if (audioData != NULL) {
-                    memcpy(audioData, payload, length);
+            if (audioTxQueue != NULL && spkFreeQueue != NULL) {
+                uint8_t* audioData = NULL;
+                // Prendre un buffer libre
+                if (xQueueReceive(spkFreeQueue, &audioData, 0) == pdPASS) {
+                    // S'assurer de ne pas déborder du buffer
+                    size_t copyLength = length;
+                    if (copyLength > SPK_BUFFER_SIZE) {
+                        copyLength = SPK_BUFFER_SIZE;
+                        Serial.println("[WS] Attention: Troncature du paquet audio reçu !");
+                    }
+                    memcpy(audioData, payload, copyLength);
 
                     // Créer la structure contenant le pointeur et la taille
                     AudioChunk chunk;
                     chunk.data = audioData;
-                    chunk.length = length;
+                    chunk.length = copyLength;
 
                     if (xQueueSend(audioTxQueue, &chunk, 0) != pdPASS) {
-                        free(audioData);
+                        xQueueSend(spkFreeQueue, &audioData, portMAX_DELAY); // Queue pleine = on remet le buffer
                         Serial.println("[WS] Erreur: audioTxQueue pleine !");
                     }
+                } else {
+                    Serial.println("[WS] Erreur: Plus de buffers audio libres !");
                 }
             }
             break;
