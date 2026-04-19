@@ -22,6 +22,13 @@ QueueHandle_t emotionQueue;
 QueueHandle_t audioTxQueue; // Serveur -> ESP32 (Haut-parleur)
 QueueHandle_t audioRxQueue; // ESP32 (Micro) -> Serveur
 
+// --- Buffers Statiques Audio ---
+uint8_t micBuffers[NUM_MIC_BUFFERS][MIC_BUFFER_SIZE];
+uint8_t spkBuffers[NUM_SPK_BUFFERS][SPK_BUFFER_SIZE];
+
+QueueHandle_t micFreeQueue;
+QueueHandle_t spkFreeQueue;
+
 // --- Architecture Dual-State (Machine à États) ---
 enum SystemState {
   OFFLINE_MP3, // Mode 1: Serveur IA injoignable. Lecteur MP3 Autonome (Carte SD -> I2S_1). Interface manuelle.
@@ -170,7 +177,7 @@ void networkTask(void *pvParameters) {
     if (xQueueReceive(audioRxQueue, &rxChunk, 0) == pdPASS) {
       if (rxChunk.data != NULL) {
         network.sendAudio(rxChunk.data, rxChunk.length);
-        free(rxChunk.data); // Libérer la mémoire allouée par micTask
+        xQueueSend(micFreeQueue, &rxChunk.data, portMAX_DELAY); // Remettre le buffer dans la queue libre
       }
     }
 
@@ -182,8 +189,6 @@ void networkTask(void *pvParameters) {
 void micTask(void *pvParameters) {
   audio.initMic();
 
-  const size_t bufferSize = 1024;
-
   for (;;) {
     // Si on est en mode Lecteur MP3, on suspend la capture micro pour économiser CPU/RAM
     if (currentState == OFFLINE_MP3) {
@@ -191,23 +196,22 @@ void micTask(void *pvParameters) {
       continue;
     }
 
-    // On alloue un buffer pour chaque lecture
-    int16_t* micBuffer = (int16_t*)malloc(bufferSize);
-
-    if (micBuffer != NULL) {
-      size_t bytesRead = audio.readMic(micBuffer, bufferSize);
+    uint8_t* micBuffer = NULL;
+    // Prendre un buffer libre
+    if (xQueueReceive(micFreeQueue, &micBuffer, portMAX_DELAY) == pdPASS) {
+      size_t bytesRead = audio.readMic((int16_t*)micBuffer, MIC_BUFFER_SIZE);
 
       if (bytesRead > 0) {
         AudioChunk chunk;
-        chunk.data = (uint8_t*)micBuffer;
+        chunk.data = micBuffer;
         chunk.length = bytesRead;
 
         // Envoyer à networkTask de manière sécurisée
         if (xQueueSend(audioRxQueue, &chunk, 0) != pdPASS) {
-          free(micBuffer); // Queue pleine = on drop le paquet
+          xQueueSend(micFreeQueue, &micBuffer, portMAX_DELAY); // Queue pleine = on remet le buffer
         }
       } else {
-        free(micBuffer);
+        xQueueSend(micFreeQueue, &micBuffer, portMAX_DELAY); // Remettre le buffer libre
       }
     }
     vTaskDelay(1 / portTICK_PERIOD_MS);
@@ -226,7 +230,7 @@ void speakerTask(void *pvParameters) {
       if (txChunk.data != NULL) {
         // Écrire la taille exacte reçue du serveur
         audio.writeSpeaker(txChunk.data, txChunk.length);
-        free(txChunk.data);
+        xQueueSend(spkFreeQueue, &txChunk.data, portMAX_DELAY); // Remettre le buffer libre
       }
     }
   }
@@ -245,10 +249,22 @@ void setup() {
   commandQueue = xQueueCreate(5, sizeof(char[32]));
   audioTxQueue = xQueueCreate(10, sizeof(AudioChunk));
   audioRxQueue = xQueueCreate(10, sizeof(AudioChunk));
+  micFreeQueue = xQueueCreate(NUM_MIC_BUFFERS, sizeof(uint8_t*));
+  spkFreeQueue = xQueueCreate(NUM_SPK_BUFFERS, sizeof(uint8_t*));
 
-  if (emotionQueue == NULL || audioTxQueue == NULL || audioRxQueue == NULL || commandQueue == NULL) {
+  if (emotionQueue == NULL || audioTxQueue == NULL || audioRxQueue == NULL || commandQueue == NULL || micFreeQueue == NULL || spkFreeQueue == NULL) {
     Serial.println("Erreur critique: Création des Queues FreeRTOS échouée.");
     while (1);
+  }
+
+  // Initialisation des files d'attente libres
+  for (int i = 0; i < NUM_MIC_BUFFERS; i++) {
+    uint8_t* ptr = micBuffers[i];
+    xQueueSend(micFreeQueue, &ptr, portMAX_DELAY);
+  }
+  for (int i = 0; i < NUM_SPK_BUFFERS; i++) {
+    uint8_t* ptr = spkBuffers[i];
+    xQueueSend(spkFreeQueue, &ptr, portMAX_DELAY);
   }
 
   // Lancement de la tâche Réseau sur le Core 0

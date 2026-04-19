@@ -62,11 +62,13 @@ void TFT_Display::drawBmp(const char *filename, int16_t x, int16_t y) {
 
       uint16_t padding = (4 - ((w * 3) & 3)) & 3;
 
-      // Allocation du buffer de lecture (SD) et du buffer de couleurs (TFT)
-      uint8_t* lineBuffer = (uint8_t*)malloc(w * 3 + padding);
-      uint16_t* colorBuffer = (uint16_t*)malloc(w * sizeof(uint16_t));
+      // Utilisation de buffers statiques dimensionnés pour l'écran (max 320 pixels de large)
+      // 320 * 3 = 960 octets pour lineBuffer, 320 * 2 = 640 octets pour colorBuffer.
+      // C'est très peu de RAM, on peut les mettre en statique dans la fonction.
+      static uint8_t lineBuffer[320 * 3 + 3]; // +3 pour le padding max
+      static uint16_t colorBuffer[320];
 
-      if (lineBuffer != NULL && colorBuffer != NULL) {
+      if (w <= 320) {
         // Définir la zone de dessin pour utiliser pushColors (optimisation DMA/SPI)
         tft.setWindow(x, y, x + w - 1, y + h - 1);
 
@@ -84,12 +86,8 @@ void TFT_Display::drawBmp(const char *filename, int16_t x, int16_t y) {
           // Note : TFT_eSPI n'a pas de pushColors inversé pour Y, on utilise pushImage par ligne
           tft.pushImage(x, y + h - 1 - row, w, 1, colorBuffer);
         }
-        free(lineBuffer);
-        free(colorBuffer);
       } else {
-        if (lineBuffer) free(lineBuffer);
-        if (colorBuffer) free(colorBuffer);
-        Serial.println("Erreur d'allocation mémoire pour le buffer BMP");
+        Serial.println("L'image est trop large pour le buffer statique.");
       }
     } else {
       Serial.println("BMP format not supported.");
