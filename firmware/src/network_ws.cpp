@@ -17,6 +17,11 @@ void Network_WS::initWiFi(const char* ssid, const char* password) {
 }
 
 void Network_WS::initWebSocket(const char* server_ip, uint16_t server_port) {
+    String hostHeader = String("Host: ") + server_ip + ":" + String(server_port);
+    String originHeader = String("Origin: ws://") + server_ip + ":" + String(server_port);
+    String extraHeaders = hostHeader + "\r\n" + originHeader;
+    webSocket.setExtraHeaders(extraHeaders.c_str());
+
     webSocket.begin(server_ip, server_port, "/");
     webSocket.onEvent(webSocketEvent);
     webSocket.setReconnectInterval(5000); // Reconnexion auto après 5s
