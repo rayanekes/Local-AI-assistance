@@ -14,7 +14,7 @@
       "microcontroller": "ESP32 (Dual-Core)",
       "input_audio": "Microphone INMP441 (I2S, 16kHz) - Pins: WS=25, SCK=32, SD=33",
       "output_audio": "Haut-parleur MAX98357A (I2S, 22.05kHz) - Pins: LRC_WS=26, BCLK=27, DIN=22",
-      "display": "Écran TFT ILI9341_2 (2.4\") avec lecteur de carte SD intégré",
+      "display": "Écran TFT ST7789 (2.4\", 240x320) avec lecteur de carte SD intégré",
       "spi_pins": {
         "MOSI": 23, "MISO": 19, "SCK": 18, "TFT_CS": 14, "TFT_DC": 2, "TFT_RST": 4, "SD_CS": 5
       }
@@ -39,12 +39,14 @@
         "audio_i2s: Gère les DMA I2S avec fréquences asymétriques (16kHz micro, 22050Hz haut-parleur).",
         "display_tft: Gère le TFT et la carte SD (via TFT_eSPI). Dessine des BMP 24-bits."
       ],
-      "ipc_safety": "Passage des buffers audio et JSON via FreeRTOS Queues (xQueueCreate, xQueueSend) en utilisant des buffers statiques (micBuffers, spkBuffers) et des queues de disponibilité (micFreeQueue, spkFreeQueue) pour éviter l'allocation dynamique et la fragmentation RAM.",
+      "ipc_safety": "Passage des buffers audio et JSON via FreeRTOS Queues (xQueueCreate, xQueueSend) avec allocation dynamique (malloc/free) pour éviter les fuites et corruptions.",
       "animations": "Tâche asynchrone basée sur xQueueReceive timeouts pour alterner les images BMP sur la carte SD (simule des clignements).",
       "latency_masking": "Lors de la réception du JSON `{\"status\": \"thinking\"}`, l'ESP32 déclenche automatiquement l'animation `reflexion` pour occuper visuellement l'utilisateur pendant que le GPU LLaMA calcule la réponse.",
       "dual_state_machine": "L'ESP32 bascule entre un mode 'Lecteur MP3 Autonome' (LVGL GUI) et un mode 'IA En-Ligne'. La commande JSON `{\"command\": \"start_mp3\"}` déclenche le chargement dynamique de LVGL. La sortie du mode MP3 exige la désallocation TOTALE (Teardown) des buffers LVGL via `lv_deinit` pour prévenir la saturation des 520Ko de RAM."
     }
   },
+
+  "current_focus": "Développement de l'interface graphique Spotify-like (LVGL) et intégration du lecteur MP3 I2S pour le mode OFFLINE_MP3 du robot, avec un écran ST7789.",
 
   "testing_tools": {
     "proxy_mic_pc": "Script (backend/tools/proxy_mic_pc.py) qui remplace le micro ESP32 par le micro du PC via 'sounddevice' tout en forwardant les réponses du serveur vers l'ESP32. (Port Proxy: 8766, Port Serveur IA: 8765).",

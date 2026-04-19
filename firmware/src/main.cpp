@@ -5,6 +5,13 @@
 #include "audio_i2s.h"
 #include "network_ws.h"
 #include "audio_chunk.h"
+#include "audio_mp3.h"
+#include "gui_spotify.h"
+
+// --- Variables Globales Mode Hors-Ligne ---
+AudioMP3 mp3Player;
+GuiSpotify spotifyUi;
+bool isMp3ModeInitialized = false;
 
 // --- Configuration Wi-Fi et Serveur ---
 const char* ssid = "VOTRE_SSID";
@@ -21,13 +28,6 @@ Network_WS network;
 QueueHandle_t emotionQueue;
 QueueHandle_t audioTxQueue; // Serveur -> ESP32 (Haut-parleur)
 QueueHandle_t audioRxQueue; // ESP32 (Micro) -> Serveur
-
-// --- Buffers Statiques Audio ---
-uint8_t micBuffers[NUM_MIC_BUFFERS][MIC_BUFFER_SIZE];
-uint8_t spkBuffers[NUM_SPK_BUFFERS][SPK_BUFFER_SIZE];
-
-QueueHandle_t micFreeQueue;
-QueueHandle_t spkFreeQueue;
 
 // --- Architecture Dual-State (Machine à États) ---
 enum SystemState {
@@ -60,13 +60,33 @@ QueueHandle_t commandQueue;
 
 // --- Fonctions de basculement d'architecture (State Machine) ---
 void load_lvgl_mp3_app() {
-  Serial.println("[STATE] Basculement -> OFFLINE_MP3");
-  // TODO: malloc des buffers LVGL, init écran, création widgets
+  if (isMp3ModeInitialized) return;
+  Serial.println("[STATE] Basculement -> OFFLINE_MP3 (Allocating LVGL & Audio)");
+
+  // Le pointeur TFT est public dans display_tft, on va devoir y accéder (ou faire un getter)
+  // Pour la démo, on suppose que l'objet global tft.tft de display est dispo,
+  // on ajoutera un getter dans display_tft.h si ça ne compile pas.
+  spotifyUi.init(display.getTftPointer());
+  spotifyUi.buildInterface();
+
+  mp3Player.init();
+  mp3Player.play("/music/test.mp3"); // Fichier test par défaut
+  spotifyUi.updateTitle("Titre Test", "Artiste Local");
+
+  isMp3ModeInitialized = true;
 }
 
 void destroy_lvgl_mp3_app() {
-  Serial.println("[STATE] Basculement -> ONLINE_AI");
-  // TODO: lv_obj_del(lv_scr_act()), free des buffers, flush complet de la mémoire
+  if (!isMp3ModeInitialized) return;
+  Serial.println("[STATE] Basculement -> ONLINE_AI (Destroying LVGL & Audio)");
+
+  mp3Player.stop();
+  spotifyUi.deinit();
+
+  // Nettoyer l'écran après la fermeture de l'UI
+  display.getTftPointer()->fillScreen(TFT_BLACK);
+
+  isMp3ModeInitialized = false;
 }
 
 // Variables globales pour stocker l'état visuel
@@ -114,9 +134,13 @@ void displayTask(void *pvParameters) {
   display.displayEmotion(currentEmotion, currentFrame);
 
   for (;;) {
-    // Si on est en mode MP3, on ne gère pas les visages
+    // Si on est en mode MP3, on ne gère pas les visages AI mais on gère LVGL et l'Audio I2S
     if (currentState == OFFLINE_MP3) {
-      vTaskDelay(100 / portTICK_PERIOD_MS);
+      if (isMp3ModeInitialized) {
+          lv_task_handler(); // Gestion LVGL
+          mp3Player.loop();  // Remplissage du buffer I2S depuis la SD
+      }
+      vTaskDelay(5 / portTICK_PERIOD_MS); // Tick rapide pour LVGL et I2S
       continue;
     }
 
@@ -177,7 +201,7 @@ void networkTask(void *pvParameters) {
     if (xQueueReceive(audioRxQueue, &rxChunk, 0) == pdPASS) {
       if (rxChunk.data != NULL) {
         network.sendAudio(rxChunk.data, rxChunk.length);
-        xQueueSend(micFreeQueue, &rxChunk.data, portMAX_DELAY); // Remettre le buffer dans la queue libre
+        free(rxChunk.data); // Libérer la mémoire allouée par micTask
       }
     }
 
@@ -189,6 +213,8 @@ void networkTask(void *pvParameters) {
 void micTask(void *pvParameters) {
   audio.initMic();
 
+  const size_t bufferSize = 1024;
+
   for (;;) {
     // Si on est en mode Lecteur MP3, on suspend la capture micro pour économiser CPU/RAM
     if (currentState == OFFLINE_MP3) {
@@ -196,22 +222,23 @@ void micTask(void *pvParameters) {
       continue;
     }
 
-    uint8_t* micBuffer = NULL;
-    // Prendre un buffer libre
-    if (xQueueReceive(micFreeQueue, &micBuffer, portMAX_DELAY) == pdPASS) {
-      size_t bytesRead = audio.readMic((int16_t*)micBuffer, MIC_BUFFER_SIZE);
+    // On alloue un buffer pour chaque lecture
+    int16_t* micBuffer = (int16_t*)malloc(bufferSize);
+
+    if (micBuffer != NULL) {
+      size_t bytesRead = audio.readMic(micBuffer, bufferSize);
 
       if (bytesRead > 0) {
         AudioChunk chunk;
-        chunk.data = micBuffer;
+        chunk.data = (uint8_t*)micBuffer;
         chunk.length = bytesRead;
 
         // Envoyer à networkTask de manière sécurisée
         if (xQueueSend(audioRxQueue, &chunk, 0) != pdPASS) {
-          xQueueSend(micFreeQueue, &micBuffer, portMAX_DELAY); // Queue pleine = on remet le buffer
+          free(micBuffer); // Queue pleine = on drop le paquet
         }
       } else {
-        xQueueSend(micFreeQueue, &micBuffer, portMAX_DELAY); // Remettre le buffer libre
+        free(micBuffer);
       }
     }
     vTaskDelay(1 / portTICK_PERIOD_MS);
@@ -225,12 +252,20 @@ void speakerTask(void *pvParameters) {
   AudioChunk txChunk;
 
   for (;;) {
+    // Si on est en mode MP3, la bibliothèque externe gère l'I2S, on ignore les packets réseau
+    if (currentState == OFFLINE_MP3) {
+      if (xQueueReceive(audioTxQueue, &txChunk, 100 / portTICK_PERIOD_MS) == pdPASS) {
+         if (txChunk.data != NULL) free(txChunk.data); // Drop silent
+      }
+      continue;
+    }
+
     // Attendre qu'un paquet audio arrive depuis le réseau
     if (xQueueReceive(audioTxQueue, &txChunk, portMAX_DELAY) == pdPASS) {
       if (txChunk.data != NULL) {
         // Écrire la taille exacte reçue du serveur
         audio.writeSpeaker(txChunk.data, txChunk.length);
-        xQueueSend(spkFreeQueue, &txChunk.data, portMAX_DELAY); // Remettre le buffer libre
+        free(txChunk.data);
       }
     }
   }
@@ -249,22 +284,10 @@ void setup() {
   commandQueue = xQueueCreate(5, sizeof(char[32]));
   audioTxQueue = xQueueCreate(10, sizeof(AudioChunk));
   audioRxQueue = xQueueCreate(10, sizeof(AudioChunk));
-  micFreeQueue = xQueueCreate(NUM_MIC_BUFFERS, sizeof(uint8_t*));
-  spkFreeQueue = xQueueCreate(NUM_SPK_BUFFERS, sizeof(uint8_t*));
 
-  if (emotionQueue == NULL || audioTxQueue == NULL || audioRxQueue == NULL || commandQueue == NULL || micFreeQueue == NULL || spkFreeQueue == NULL) {
+  if (emotionQueue == NULL || audioTxQueue == NULL || audioRxQueue == NULL || commandQueue == NULL) {
     Serial.println("Erreur critique: Création des Queues FreeRTOS échouée.");
     while (1);
-  }
-
-  // Initialisation des files d'attente libres
-  for (int i = 0; i < NUM_MIC_BUFFERS; i++) {
-    uint8_t* ptr = micBuffers[i];
-    xQueueSend(micFreeQueue, &ptr, portMAX_DELAY);
-  }
-  for (int i = 0; i < NUM_SPK_BUFFERS; i++) {
-    uint8_t* ptr = spkBuffers[i];
-    xQueueSend(spkFreeQueue, &ptr, portMAX_DELAY);
   }
 
   // Lancement de la tâche Réseau sur le Core 0

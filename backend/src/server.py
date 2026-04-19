@@ -449,18 +449,9 @@ async def handle_esp32_connection(websocket):
         pass
 
 
-async def process_request(*args, **kwargs):
-    # Désactive la vérification stricte de l'Origin (compatible Websockets 12.x à 16.x)
-    for arg in args:
-        if hasattr(arg, 'headers') and "Origin" in arg.headers:
-            del arg.headers["Origin"]
-        elif hasattr(arg, '__contains__') and hasattr(arg, '__delitem__') and "Origin" in arg:
-            del arg["Origin"]
-    return None
-
 async def main():
     import socket
-    async with websockets.serve(handle_esp32_connection, "0.0.0.0", 8765, family=socket.AF_INET, reuse_address=True, reuse_port=True, process_request=process_request):
+    async with websockets.serve(handle_esp32_connection, "0.0.0.0", 8765, family=socket.AF_INET, reuse_address=True, reuse_port=True):
         await asyncio.Future()
 
 if __name__ == "__main__":

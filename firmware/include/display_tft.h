@@ -13,6 +13,7 @@ public:
     TFT_Display();
     void init();
     void displayEmotion(String emotion, int frame);
+    TFT_eSPI* getTftPointer() { return &tft; }
 
 private:
     TFT_eSPI tft;

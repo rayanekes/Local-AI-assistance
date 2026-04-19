@@ -17,11 +17,6 @@ void Network_WS::initWiFi(const char* ssid, const char* password) {
 }
 
 void Network_WS::initWebSocket(const char* server_ip, uint16_t server_port) {
-    String hostHeader = String("Host: ") + server_ip + ":" + String(server_port);
-    String originHeader = String("Origin: ws://") + server_ip + ":" + String(server_port);
-    String extraHeaders = hostHeader + "\r\n" + originHeader;
-    webSocket.setExtraHeaders(extraHeaders.c_str());
-
     webSocket.begin(server_ip, server_port, "/");
     webSocket.onEvent(webSocketEvent);
     webSocket.setReconnectInterval(5000); // Reconnexion auto après 5s
@@ -118,29 +113,21 @@ void Network_WS::webSocketEvent(WStype_t type, uint8_t * payload, size_t length)
 
         case WStype_BIN:
             // Le serveur a envoyé de l'audio TTS
-            if (audioTxQueue != NULL && spkFreeQueue != NULL) {
-                uint8_t* audioData = NULL;
-                // Prendre un buffer libre
-                if (xQueueReceive(spkFreeQueue, &audioData, 0) == pdPASS) {
-                    // S'assurer de ne pas déborder du buffer
-                    size_t copyLength = length;
-                    if (copyLength > SPK_BUFFER_SIZE) {
-                        copyLength = SPK_BUFFER_SIZE;
-                        Serial.println("[WS] Attention: Troncature du paquet audio reçu !");
-                    }
-                    memcpy(audioData, payload, copyLength);
+            if (audioTxQueue != NULL) {
+                // Allouer la mémoire pour le payload
+                uint8_t* audioData = (uint8_t*)malloc(length);
+                if (audioData != NULL) {
+                    memcpy(audioData, payload, length);
 
                     // Créer la structure contenant le pointeur et la taille
                     AudioChunk chunk;
                     chunk.data = audioData;
-                    chunk.length = copyLength;
+                    chunk.length = length;
 
                     if (xQueueSend(audioTxQueue, &chunk, 0) != pdPASS) {
-                        xQueueSend(spkFreeQueue, &audioData, portMAX_DELAY); // Queue pleine = on remet le buffer
+                        free(audioData);
                         Serial.println("[WS] Erreur: audioTxQueue pleine !");
                     }
-                } else {
-                    Serial.println("[WS] Erreur: Plus de buffers audio libres !");
                 }
             }
             break;
