@@ -449,9 +449,31 @@ async def handle_esp32_connection(websocket):
         pass
 
 
+async def process_request(*args):
+    # Intercept WebSocket handshake to remove 'Origin' header,
+    # fixing strict origin validation in websockets library.
+    if len(args) == 2:
+        if hasattr(args[1], 'headers'): # websockets >= 14.0
+            req = args[1]
+            if "Origin" in req.headers:
+                del req.headers["Origin"]
+        else: # websockets < 14.0
+            req_headers = args[1]
+            if "Origin" in req_headers:
+                del req_headers["Origin"]
+    return None
+
 async def main():
     import socket
-    async with websockets.serve(handle_esp32_connection, "0.0.0.0", 8765, family=socket.AF_INET, reuse_address=True, reuse_port=True):
+    async with websockets.serve(
+        handle_esp32_connection,
+        "0.0.0.0",
+        8765,
+        family=socket.AF_INET,
+        reuse_address=True,
+        reuse_port=True,
+        process_request=process_request
+    ):
         await asyncio.Future()
 
 if __name__ == "__main__":
