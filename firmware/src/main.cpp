@@ -12,6 +12,9 @@ const char* password = "VOTRE_PASSWORD";
 const char* ws_server_ip = "192.168.x.x"; // IP de votre PC Pop!_OS
 const uint16_t ws_server_port = 8765;
 
+uint8_t micBuffers[10][1024];
+uint8_t spkBuffers[10][4096];
+
 // --- Instances des Modules ---
 TFT_Display display;
 Audio_I2S audio;
@@ -21,6 +24,8 @@ Network_WS network;
 QueueHandle_t emotionQueue;
 QueueHandle_t audioTxQueue; // Serveur -> ESP32 (Haut-parleur)
 QueueHandle_t audioRxQueue; // ESP32 (Micro) -> Serveur
+QueueHandle_t micFreeQueue;
+QueueHandle_t spkFreeQueue;
 
 // --- Architecture Dual-State (Machine à États) ---
 enum SystemState {
@@ -51,15 +56,57 @@ QueueHandle_t commandQueue;
  *    libérant les ~40Ko de RAM utilisés par la GUI avant de relancer les tâches IA WebSockets.
  */
 
+#include <lvgl.h>
+
+static lv_disp_draw_buf_t draw_buf;
+static lv_color_t *buf1;
+static lv_disp_drv_t disp_drv;
+
+void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
+  // Ignored right now, but would flush to TFT in a real setup
+  lv_disp_flush_ready(disp);
+}
+
 // --- Fonctions de basculement d'architecture (State Machine) ---
 void load_lvgl_mp3_app() {
   Serial.println("[STATE] Basculement -> OFFLINE_MP3");
-  // TODO: malloc des buffers LVGL, init écran, création widgets
+
+  lv_init();
+
+  buf1 = (lv_color_t *)malloc(320 * 40 * sizeof(lv_color_t));
+  if (buf1 == NULL) {
+      Serial.println("LVGL malloc failed");
+      return;
+  }
+
+  lv_disp_draw_buf_init(&draw_buf, buf1, NULL, 320 * 40);
+
+  lv_disp_drv_init(&disp_drv);
+  disp_drv.hor_res = 320;
+  disp_drv.ver_res = 240;
+  disp_drv.flush_cb = my_disp_flush;
+  disp_drv.draw_buf = &draw_buf;
+  lv_disp_drv_register(&disp_drv);
+
+  lv_obj_t * bg = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(bg, 320, 240);
+  lv_obj_set_style_bg_color(bg, lv_color_hex(0x1DB954), 0); // Spotify Green
+
+  lv_obj_t * label = lv_label_create(bg);
+  lv_label_set_text(label, "Spotify Player");
+  lv_obj_center(label);
+
+  lv_timer_handler();
 }
 
 void destroy_lvgl_mp3_app() {
   Serial.println("[STATE] Basculement -> ONLINE_AI");
-  // TODO: lv_obj_del(lv_scr_act()), free des buffers, flush complet de la mémoire
+  lv_obj_clean(lv_scr_act());
+  lv_deinit();
+  if (buf1 != NULL) {
+      free(buf1);
+      buf1 = NULL;
+  }
 }
 
 // Variables globales pour stocker l'état visuel
@@ -170,7 +217,7 @@ void networkTask(void *pvParameters) {
     if (xQueueReceive(audioRxQueue, &rxChunk, 0) == pdPASS) {
       if (rxChunk.data != NULL) {
         network.sendAudio(rxChunk.data, rxChunk.length);
-        free(rxChunk.data); // Libérer la mémoire allouée par micTask
+        xQueueSend(micFreeQueue, &rxChunk.data, 0); // Retour au pool libre
       }
     }
 
@@ -191,23 +238,20 @@ void micTask(void *pvParameters) {
       continue;
     }
 
-    // On alloue un buffer pour chaque lecture
-    int16_t* micBuffer = (int16_t*)malloc(bufferSize);
-
-    if (micBuffer != NULL) {
-      size_t bytesRead = audio.readMic(micBuffer, bufferSize);
-
+        // Utilisation des buffers statiques via FreeRTOS
+    uint8_t* micBuffer;
+    if (xQueueReceive(micFreeQueue, &micBuffer, portMAX_DELAY) == pdPASS) {
+      size_t bytesRead = audio.readMic((int16_t*)micBuffer, bufferSize);
       if (bytesRead > 0) {
         AudioChunk chunk;
-        chunk.data = (uint8_t*)micBuffer;
+        chunk.data = micBuffer;
         chunk.length = bytesRead;
 
-        // Envoyer à networkTask de manière sécurisée
         if (xQueueSend(audioRxQueue, &chunk, 0) != pdPASS) {
-          free(micBuffer); // Queue pleine = on drop le paquet
+          xQueueSend(micFreeQueue, &micBuffer, 0); // Drop le paquet
         }
       } else {
-        free(micBuffer);
+        xQueueSend(micFreeQueue, &micBuffer, 0);
       }
     }
     vTaskDelay(1 / portTICK_PERIOD_MS);
@@ -226,7 +270,7 @@ void speakerTask(void *pvParameters) {
       if (txChunk.data != NULL) {
         // Écrire la taille exacte reçue du serveur
         audio.writeSpeaker(txChunk.data, txChunk.length);
-        free(txChunk.data);
+        xQueueSend(spkFreeQueue, &txChunk.data, 0); // Retour au pool libre
       }
     }
   }
@@ -245,10 +289,20 @@ void setup() {
   commandQueue = xQueueCreate(5, sizeof(char[32]));
   audioTxQueue = xQueueCreate(10, sizeof(AudioChunk));
   audioRxQueue = xQueueCreate(10, sizeof(AudioChunk));
+  micFreeQueue = xQueueCreate(10, sizeof(uint8_t*));
+  spkFreeQueue = xQueueCreate(10, sizeof(uint8_t*));
 
-  if (emotionQueue == NULL || audioTxQueue == NULL || audioRxQueue == NULL || commandQueue == NULL) {
+  if (emotionQueue == NULL || audioTxQueue == NULL || audioRxQueue == NULL || commandQueue == NULL || micFreeQueue == NULL || spkFreeQueue == NULL) {
     Serial.println("Erreur critique: Création des Queues FreeRTOS échouée.");
     while (1);
+  }
+
+  // Pre-fill free queues with pointers to static buffers
+  for (int i = 0; i < 10; i++) {
+    uint8_t* mptr = micBuffers[i];
+    uint8_t* sptr = spkBuffers[i];
+    xQueueSend(micFreeQueue, &mptr, 0);
+    xQueueSend(spkFreeQueue, &sptr, 0);
   }
 
   // Lancement de la tâche Réseau sur le Core 0

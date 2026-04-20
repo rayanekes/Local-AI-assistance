@@ -1,4 +1,12 @@
-#include "display_tft.h"
+with open("firmware/include/display_tft.h", "r") as f:
+    content = f.read()
+
+content = content.replace("private:", "private:\n    bool baseDrawn = false;\n    uint16_t bgColor = 0;\n")
+
+with open("firmware/include/display_tft.h", "w") as f:
+    f.write(content)
+
+display_cpp = """#include "display_tft.h"
 
 TFT_Display::TFT_Display() : tft(TFT_eSPI()) {}
 
@@ -184,3 +192,7 @@ void TFT_Display::drawBmp(const char *filename, int16_t x, int16_t y) {
   }
   bmpFS.close();
 }
+"""
+
+with open("firmware/src/display_tft.cpp", "w") as f:
+    f.write(display_cpp)

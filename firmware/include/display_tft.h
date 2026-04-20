@@ -15,6 +15,9 @@ public:
     void displayEmotion(String emotion, int frame);
 
 private:
+    bool baseDrawn = false;
+    uint16_t bgColor = 0;
+
     TFT_eSPI tft;
     void drawBmp(const char *filename, int16_t x, int16_t y);
 };

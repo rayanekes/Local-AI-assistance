@@ -1,0 +1,65 @@
+<<<<<<< SEARCH
+// --- Fonctions de basculement d'architecture (State Machine) ---
+void load_lvgl_mp3_app() {
+  Serial.println("[STATE] Basculement -> OFFLINE_MP3");
+  // TODO: malloc des buffers LVGL, init écran, création widgets
+}
+
+void destroy_lvgl_mp3_app() {
+  Serial.println("[STATE] Basculement -> ONLINE_AI");
+  // TODO: lv_obj_del(lv_scr_act()), free des buffers, flush complet de la mémoire
+}
+=======
+#include <lvgl.h>
+
+static lv_disp_draw_buf_t draw_buf;
+static lv_color_t *buf1;
+static lv_disp_drv_t disp_drv;
+
+void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
+  // Optionnel si implémenté
+  lv_disp_flush_ready(disp);
+}
+
+// --- Fonctions de basculement d'architecture (State Machine) ---
+void load_lvgl_mp3_app() {
+  Serial.println("[STATE] Basculement -> OFFLINE_MP3");
+
+  lv_init();
+
+  buf1 = (lv_color_t *)malloc(320 * 40 * sizeof(lv_color_t));
+  if (buf1 == NULL) {
+      Serial.println("LVGL malloc failed");
+      return;
+  }
+
+  lv_disp_draw_buf_init(&draw_buf, buf1, NULL, 320 * 40);
+
+  lv_disp_drv_init(&disp_drv);
+  disp_drv.hor_res = 320;
+  disp_drv.ver_res = 240;
+  disp_drv.flush_cb = my_disp_flush;
+  disp_drv.draw_buf = &draw_buf;
+  lv_disp_drv_register(&disp_drv);
+
+  lv_obj_t * bg = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(bg, 320, 240);
+  lv_obj_set_style_bg_color(bg, lv_color_hex(0x1DB954), 0); // Spotify Green
+
+  lv_obj_t * label = lv_label_create(bg);
+  lv_label_set_text(label, "Spotify Player Mockup");
+  lv_obj_center(label);
+
+  lv_timer_handler();
+}
+
+void destroy_lvgl_mp3_app() {
+  Serial.println("[STATE] Basculement -> ONLINE_AI");
+  lv_obj_clean(lv_scr_act());
+  lv_deinit();
+  if (buf1 != NULL) {
+      free(buf1);
+      buf1 = NULL;
+  }
+}
+>>>>>>> REPLACE

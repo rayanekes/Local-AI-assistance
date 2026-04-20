@@ -18,6 +18,7 @@ void Network_WS::initWiFi(const char* ssid, const char* password) {
 
 void Network_WS::initWebSocket(const char* server_ip, uint16_t server_port) {
     webSocket.begin(server_ip, server_port, "/");
+    webSocket.setExtraHeaders("Origin: http://localhost\r\nHost: localhost");
     webSocket.onEvent(webSocketEvent);
     webSocket.setReconnectInterval(5000); // Reconnexion auto après 5s
     Serial.println("WebSocket Client initialisé.");
@@ -113,19 +114,20 @@ void Network_WS::webSocketEvent(WStype_t type, uint8_t * payload, size_t length)
 
         case WStype_BIN:
             // Le serveur a envoyé de l'audio TTS
-            if (audioTxQueue != NULL) {
-                // Allouer la mémoire pour le payload
-                uint8_t* audioData = (uint8_t*)malloc(length);
-                if (audioData != NULL) {
-                    memcpy(audioData, payload, length);
+            extern QueueHandle_t spkFreeQueue;
+            if (audioTxQueue != NULL && spkFreeQueue != NULL) {
+                uint8_t* audioData;
+                if (xQueueReceive(spkFreeQueue, &audioData, 0) == pdPASS) {
+                    size_t copyLen = length > 4096 ? 4096 : length;
+                    memcpy(audioData, payload, copyLen);
 
                     // Créer la structure contenant le pointeur et la taille
                     AudioChunk chunk;
                     chunk.data = audioData;
-                    chunk.length = length;
+                    chunk.length = copyLen;
 
                     if (xQueueSend(audioTxQueue, &chunk, 0) != pdPASS) {
-                        free(audioData);
+                        xQueueSend(spkFreeQueue, &audioData, 0);
                         Serial.println("[WS] Erreur: audioTxQueue pleine !");
                     }
                 }

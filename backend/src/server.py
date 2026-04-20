@@ -200,15 +200,13 @@ def load_vad():
     print("✅ Silero VAD chargé")
     return model
 
-# Lancer le chargement dans 3 threads parallèles (Diminue la latence de démarrage (I/O))
-with concurrent.futures.ThreadPoolExecutor() as executor:
-    future_whisper = executor.submit(load_whisper)
-    future_llama = executor.submit(load_llama)
-    future_vad = executor.submit(load_vad)
-
-    whisper = future_whisper.result()
-    llm = future_llama.result()
-    vad_model = future_vad.result()
+# Lancer le chargement de manière séquentielle pour éviter les pics de VRAM
+print("Chargement de Whisper...")
+whisper = load_whisper()
+print("Chargement de Llama...")
+llm = load_llama()
+print("Chargement de VAD...")
+vad_model = load_vad()
 
 # =========================
 # OUTILS
@@ -451,7 +449,10 @@ async def handle_esp32_connection(websocket):
 
 async def main():
     import socket
-    async with websockets.serve(handle_esp32_connection, "0.0.0.0", 8765, family=socket.AF_INET, reuse_address=True, reuse_port=True):
+    async def process_request(path, request_headers):
+        pass # Accept all
+    async with websockets.serve(handle_esp32_connection, "0.0.0.0", 8765, family=socket.AF_INET, reuse_address=True, reuse_port=True, process_request=process_request):
+        print("SERVER_READY")
         await asyncio.Future()
 
 if __name__ == "__main__":
