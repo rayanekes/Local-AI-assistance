@@ -5,7 +5,8 @@
 #define I2S_BCLK 27
 #define I2S_LRC 26
 
-AudioMP3::AudioMP3() : playing(false) {}
+// Explicitly initialize Audio on I2S_NUM_1 to avoid conflict with the microphone on I2S_NUM_0
+AudioMP3::AudioMP3() : audioI2S(true, I2S_NUM_1), playing(false) {}
 
 void AudioMP3::init() {
     audioI2S.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
@@ -35,4 +36,12 @@ void AudioMP3::loop() {
 
 bool AudioMP3::isPlaying() {
     return audioI2S.isRunning();
+}
+
+uint32_t AudioMP3::getAudioCurrentTime() {
+    return audioI2S.getAudioCurrentTime();
+}
+
+uint32_t AudioMP3::getAudioFileDuration() {
+    return audioI2S.getAudioFileDuration();
 }

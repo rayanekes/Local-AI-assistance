@@ -1,4 +1,5 @@
 #include "gui_spotify.h"
+#include <esp_heap_caps.h>
 
 // Le pointeur TFT est stocké globalement *seulement pour le callback LVGL*
 static TFT_eSPI* global_tft_ptr = nullptr;
@@ -115,6 +116,7 @@ void GuiSpotify::deinit() {
     if (draw_buf) free(draw_buf);
     if (disp_drv) free(disp_drv);
 
-    lv_deinit();
+    // lv_deinit() n'existe pas dans LVGL v8, on gère la destruction logiciellement
+    lv_obj_clean(lv_scr_act());
     global_tft_ptr = nullptr;
 }

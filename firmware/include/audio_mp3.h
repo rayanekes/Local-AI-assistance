@@ -15,6 +15,10 @@ public:
     void stop();
     bool isPlaying();
 
+    // Ajout des méthodes pour récupérer le temps
+    uint32_t getAudioCurrentTime();
+    uint32_t getAudioFileDuration();
+
 private:
     Audio audioI2S;
     bool playing;

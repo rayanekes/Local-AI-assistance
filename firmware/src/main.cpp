@@ -106,15 +106,9 @@ void orchestratorTask(void *pvParameters) {
       String cmd = String(receivedCommand);
       if (cmd == "start_mp3" && currentState != OFFLINE_MP3) {
         currentState = OFFLINE_MP3;
-        load_lvgl_mp3_app();
+        // La gestion du basculement se fera dans displayTask pour éviter les conflits SPI et FreeRTOS
       } else if (cmd == "stop_mp3" && currentState != ONLINE_AI) {
         currentState = ONLINE_AI;
-        destroy_lvgl_mp3_app();
-
-        // Reset visuel
-        display.init();
-        currentEmotion = "neutre";
-        display.displayEmotion(currentEmotion, 1);
       }
     }
   }
@@ -129,14 +123,39 @@ void displayTask(void *pvParameters) {
   int currentFrame = 1;
   unsigned long lastAnimTime = 0;
 
+  SystemState lastHandledState = ONLINE_AI;
+
   // Par défaut, l'émotion de démarrage
   currentEmotion = "neutre";
   display.displayEmotion(currentEmotion, currentFrame);
 
   for (;;) {
+    // Gestion des transitions d'état de manière thread-safe dans la tâche d'affichage
+    if (currentState != lastHandledState) {
+      if (currentState == OFFLINE_MP3) {
+        load_lvgl_mp3_app();
+      } else if (currentState == ONLINE_AI) {
+        destroy_lvgl_mp3_app();
+
+        // Reconfigurer le taux d'échantillonnage de l'I2S pour le TTS IA
+        audio.initSpeaker();
+
+        // Reset visuel (sans appeler display.init() pour éviter les fuites SD)
+        currentEmotion = "neutre";
+        display.displayEmotion(currentEmotion, 1);
+      }
+      lastHandledState = currentState;
+    }
+
     // Si on est en mode MP3, on ne gère pas les visages AI mais on gère LVGL et l'Audio I2S
     if (currentState == OFFLINE_MP3) {
       if (isMp3ModeInitialized) {
+          // Mise à jour de l'UI avec les temps audio
+          uint32_t currentTime = mp3Player.getAudioCurrentTime();
+          uint32_t duration = mp3Player.getAudioFileDuration();
+          spotifyUi.updateProgress(currentTime, duration);
+          spotifyUi.togglePlayPauseIcon(mp3Player.isPlaying());
+
           lv_task_handler(); // Gestion LVGL
           mp3Player.loop();  // Remplissage du buffer I2S depuis la SD
       }
