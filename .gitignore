@@ -21,6 +21,7 @@ __pycache__/
 *.pyc
 .pio/
 .vscode/
+firmware/include/config.h
 
 # Fichiers de log
 *.log

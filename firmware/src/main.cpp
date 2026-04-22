@@ -8,16 +8,27 @@
 #include "audio_mp3.h"
 #include "gui_spotify.h"
 
+// Tentative d'inclusion de la configuration locale (exclue du Git)
+#if __has_include("config.h")
+  #include "config.h"
+#else
+  // Valeurs par défaut si config.h est absent
+  #define WIFI_SSID "VOTRE_SSID"
+  #define WIFI_PASSWORD "VOTRE_PASSWORD"
+  #define WS_SERVER_IP "192.168.x.x"
+  #define WS_SERVER_PORT 8765
+#endif
+
 // --- Variables Globales Mode Hors-Ligne ---
 AudioMP3 mp3Player;
 GuiSpotify spotifyUi;
 bool isMp3ModeInitialized = false;
 
 // --- Configuration Wi-Fi et Serveur ---
-const char* ssid = "VOTRE_SSID";
-const char* password = "VOTRE_PASSWORD";
-const char* ws_server_ip = "192.168.x.x"; // IP de votre PC Pop!_OS
-const uint16_t ws_server_port = 8765;
+const char* ssid = WIFI_SSID;
+const char* password = WIFI_PASSWORD;
+const char* ws_server_ip = WS_SERVER_IP;
+const uint16_t ws_server_port = WS_SERVER_PORT;
 
 // --- Instances des Modules ---
 TFT_Display display;

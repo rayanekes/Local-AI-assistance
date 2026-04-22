@@ -1,0 +1,12 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+// --- Configuration Wi-Fi ---
+#define WIFI_SSID "VOTRE_SSID"
+#define WIFI_PASSWORD "VOTRE_PASSWORD"
+
+// --- Configuration Serveur WebSocket ---
+#define WS_SERVER_IP "192.168.x.x"
+#define WS_SERVER_PORT 8765
+
+#endif // CONFIG_H
