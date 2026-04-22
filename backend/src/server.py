@@ -36,7 +36,7 @@ def sauvegarder_memoire(nouveau_contexte):
                   f, ensure_ascii=False, indent=4)
 
 async def synthese_memoire_background(nouvelle_info, llm_instance):
-    mem_actuelle = charger_memoire()
+    mem_actuelle = await asyncio.to_thread(charger_memoire)
 
     prompt_synthese = (
         f"Tu es un module cognitif. Voici la mémoire actuelle de l'utilisateur: '{mem_actuelle}'. "
@@ -54,7 +54,11 @@ async def synthese_memoire_background(nouvelle_info, llm_instance):
 
         res = await asyncio.to_thread(run_llm)
         nouveau_contexte = res["choices"][0]["message"]["content"].strip()
-        await asyncio.to_thread(sauvegarder_memoire, nouveau_contexte)
+
+        def write_mem():
+            sauvegarder_memoire(nouveau_contexte)
+
+        await asyncio.to_thread(write_mem)
 
         # [Correction d'urgence] : Réinjecter la nouvelle mémoire dans le prompt système en direct
         global conversation_history
