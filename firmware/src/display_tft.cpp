@@ -23,8 +23,17 @@ void TFT_Display::init() {
 }
 
 void TFT_Display::displayEmotion(String emotion, int frame) {
+  // Sanitize the emotion string to prevent path traversal
+  String sanitizedEmotion = "";
+  for (unsigned int i = 0; i < emotion.length(); i++) {
+    char c = emotion.charAt(i);
+    if (isalnum(c) || c == '_' || c == '-') {
+      sanitizedEmotion += c;
+    }
+  }
+
   // Construit le chemin avec le numéro de frame (ex: "/joie_1.bmp")
-  String bmpPath = "/" + emotion + "_" + String(frame) + ".bmp";
+  String bmpPath = "/" + sanitizedEmotion + "_" + String(frame) + ".bmp";
   tft.fillScreen(TFT_BLACK); // Nettoyer l'écran avant d'afficher
   drawBmp(bmpPath.c_str(), 0, 0);
 }
