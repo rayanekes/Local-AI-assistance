@@ -13,6 +13,7 @@ public:
     void pause();
     void loop();
     void stop();
+    void deinit(); // Nouvelle méthode pour désinstaller proprement le driver
     bool isPlaying();
 
     // Ajout des méthodes pour récupérer le temps

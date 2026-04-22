@@ -6,7 +6,9 @@
 #define I2S_LRC 26
 
 // Explicitly initialize Audio on I2S_NUM_1 to avoid conflict with the microphone on I2S_NUM_0
-AudioMP3::AudioMP3() : audioI2S(true, I2S_NUM_1), playing(false) {}
+// The first parameter is internalDAC (false to use external I2S DAC like MAX98357A)
+// The second is channelEnabled (3 for both channels), the third is i2sPort (I2S_NUM_1)
+AudioMP3::AudioMP3() : audioI2S(false, 3, I2S_NUM_1), playing(false) {}
 
 void AudioMP3::init() {
     audioI2S.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
@@ -28,6 +30,15 @@ void AudioMP3::pause() {
 void AudioMP3::stop() {
     audioI2S.stopSong();
     playing = false;
+}
+
+void AudioMP3::deinit() {
+    audioI2S.stopSong();
+    playing = false;
+    // La désinstallation du driver est nécessaire pour éviter les conflits d'état
+    // lors du retour au mode AI, cependant la bibliothèque ESP32-audioI2S ne fournit
+    // pas de méthode directe pour le désinstaller depuis son interface publique.
+    // Mais on nettoie au moins son état d'exécution.
 }
 
 void AudioMP3::loop() {

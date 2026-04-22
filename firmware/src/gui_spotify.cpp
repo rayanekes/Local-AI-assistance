@@ -22,7 +22,8 @@ void GuiSpotify::init(TFT_eSPI* tft) {
     _tft = tft;
     global_tft_ptr = tft;
 
-    lv_init();
+    // lv_init(); doit être appelé une seule fois au boot (dans displayTask), pas ici
+    // pour éviter les fuites mémoires répétées.
 
     // Allocation dynamique d'un buffer de 1/10 d'écran (assez pour un ST7789 sur ESP32)
     buf1 = (lv_color_t*)heap_caps_malloc(screenWidth * 24 * sizeof(lv_color_t), MALLOC_CAP_DMA);
@@ -109,6 +110,9 @@ void GuiSpotify::togglePlayPauseIcon(bool isPlaying) {
 
 void GuiSpotify::deinit() {
     // Nettoyage critique pour libérer la RAM avant le retour à l'IA
+    // Il faut nettoyer les objets AVANT de supprimer le display
+    lv_obj_clean(lv_scr_act());
+
     if(disp) {
         lv_disp_remove(disp);
     }
@@ -116,7 +120,5 @@ void GuiSpotify::deinit() {
     if (draw_buf) free(draw_buf);
     if (disp_drv) free(disp_drv);
 
-    // lv_deinit() n'existe pas dans LVGL v8, on gère la destruction logiciellement
-    lv_obj_clean(lv_scr_act());
     global_tft_ptr = nullptr;
 }

@@ -80,7 +80,7 @@ void destroy_lvgl_mp3_app() {
   if (!isMp3ModeInitialized) return;
   Serial.println("[STATE] Basculement -> ONLINE_AI (Destroying LVGL & Audio)");
 
-  mp3Player.stop();
+  mp3Player.deinit();
   spotifyUi.deinit();
 
   // Nettoyer l'écran après la fermeture de l'UI
@@ -118,6 +118,7 @@ void orchestratorTask(void *pvParameters) {
 // Gère l'affichage asynchrone et les animations (clignements)
 void displayTask(void *pvParameters) {
   display.init();
+  lv_init(); // Initialisé une seule fois au boot pour éviter les fuites de mémoire
 
   char receivedEmotion[32];
   int currentFrame = 1;
