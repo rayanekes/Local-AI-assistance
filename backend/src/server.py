@@ -1,13 +1,19 @@
 import os
 import json
 import asyncio
-import websockets
 import re
+import shutil
+import sys
+import concurrent.futures
+import time
+import socket
+from collections import deque
+
 import numpy as np
 import torch
 import scipy.io.wavfile as wav
-from collections import deque
-
+import websockets
+import llama_cpp
 from faster_whisper import WhisperModel
 from silero_vad import load_silero_vad, get_speech_timestamps
 from llama_cpp import Llama
@@ -97,8 +103,6 @@ LLM_MODEL_PATH_SPLIT = os.path.join(MODELS_DIR, "qwen2.5-7b-instruct-q4_k_m-0000
 WHISPER_MODEL = "medium" # Modèle plus grand pour une meilleure détection, tout en gérant la VRAM (6GB)
 WHISPER_DEVICE = "cuda"
 
-import shutil
-
 PIPER_BIN = "piper" # Utilise la commande pip globale (piper-tts)
 PIPER_MODEL = os.path.join(BASE_DIR, "piper", "fr_FR-siwis-medium.onnx")
 
@@ -125,9 +129,6 @@ conversation_history = [{"role": "system", "content": SYSTEM_PROMPT}]
 # =========================
 # INITIALISATION ML PARALLÈLE
 # =========================
-
-import sys
-import concurrent.futures
 
 # Détermination automatique du bon fichier LLM à charger
 if os.path.exists(LLM_MODEL_PATH_SPLIT):
@@ -170,7 +171,6 @@ def load_whisper():
 def load_llama():
     try:
         # Vérification interne pour savoir si CUDA est réellement activé dans llama.cpp
-        import llama_cpp
         if not llama_cpp.llama_supports_gpu_offload():
             print("\n⚠️ AVERTISSEMENT : llama-cpp-python n'a pas été compilé avec le support CUDA !")
             print("Le modèle tourne actuellement sur le CPU (très lent, 100% CPU, faible utilisation VRAM).")
@@ -258,7 +258,6 @@ async def handle_esp32_connection(websocket):
     robot_is_answering = False
     interrupt_flag = False
 
-    import time
     audio_buffer = []
     pre_roll = deque(maxlen=8)
     silence_frames = 0
@@ -450,7 +449,6 @@ async def handle_esp32_connection(websocket):
 
 
 async def main():
-    import socket
     async with websockets.serve(handle_esp32_connection, "0.0.0.0", 8765, family=socket.AF_INET, reuse_address=True, reuse_port=True):
         await asyncio.Future()
 
