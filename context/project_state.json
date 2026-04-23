@@ -29,7 +29,8 @@
       "tts": "Piper (fr_FR-siwis-medium.onnx) appelé via asyncio.create_subprocess_exec (stdout asynchrone).",
       "llm_constraint": "Le prompt force une réponse JSON avec un champ 'speech' STRICTEMENT en français pur (pour le TTS).",
       "memory_rag": "Mémoire dynamique stockée dans backend/memory/memoire_utilisateur.json, mise à jour en tâche de fond.",
-      "websocket_server": "Serveur asyncio pur. Aucune fonction bloquante (utilisation de asyncio.to_thread pour Whisper et le flux LLM)."
+      "websocket_server": "Serveur asyncio pur. Aucune fonction bloquante (utilisation de asyncio.to_thread pour Whisper et le flux LLM).",
+      "utility_logic": "Logique d'extraction et de traitement (JSONSpeechExtractor, split_tts_sentence) isolée dans backend/src/utils.py pour faciliter les tests unitaires sans charger les modèles IA lourds."
     },
     "firmware_cpp": {
       "framework": "Arduino (via PlatformIO, env: esp32dev).",
