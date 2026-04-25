@@ -249,6 +249,15 @@ void micTask(void *pvParameters) {
       size_t bytesRead = audio.readMic(micBuffer, bufferSize);
 
       if (bytesRead > 0) {
+        // Appliquer un gain logiciel x4 avec clipping
+        int numSamples = bytesRead / 2; // 16-bit = 2 bytes per sample
+        for (int i = 0; i < numSamples; i++) {
+          int32_t sample = micBuffer[i] * 4;
+          if (sample > 32767) sample = 32767;
+          if (sample < -32768) sample = -32768;
+          micBuffer[i] = (int16_t)sample;
+        }
+
         AudioChunk chunk;
         chunk.data = (uint8_t*)micBuffer;
         chunk.length = bytesRead;

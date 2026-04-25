@@ -22,6 +22,8 @@ void Audio_I2S::initMic() {
         .data_in_num = I2S_MIC_SD
     };
 
+    // Ensure driver is uninstalled before installing to prevent ESP_ERR_INVALID_STATE
+    i2s_driver_uninstall(I2S_MIC_PORT);
     i2s_driver_install(I2S_MIC_PORT, &i2s_mic_config, 0, NULL);
     i2s_set_pin(I2S_MIC_PORT, &i2s_mic_pins);
     Serial.println("Microphone I2S (INMP441) initialisé.");
@@ -49,8 +51,14 @@ void Audio_I2S::initSpeaker() {
         .data_in_num = I2S_PIN_NO_CHANGE
     };
 
+    // Ensure driver is uninstalled before installing to prevent ESP_ERR_INVALID_STATE
+    i2s_driver_uninstall(I2S_SPK_PORT);
     i2s_driver_install(I2S_SPK_PORT, &i2s_spk_config, 0, NULL);
     i2s_set_pin(I2S_SPK_PORT, &i2s_spk_pins);
+
+    // Clear DMA buffers to prevent startup pop/hiss
+    i2s_zero_dma_buffer(I2S_SPK_PORT);
+
     Serial.println("Haut-Parleur I2S (MAX98357A) initialisé.");
 }
 

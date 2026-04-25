@@ -10,10 +10,15 @@ extern QueueHandle_t audioTxQueue;
 WebSocketsClient Network_WS::webSocket;
 
 void Network_WS::initWiFi(const char* ssid, const char* password) {
-    Serial.print("Connexion au Wi-Fi ");
-    Serial.println(ssid);
-    // [Correction] Amorcer la connexion sans bloquer infiniment avec un "while"
-    WiFi.begin(ssid, password);
+    Serial.print("Configuration du Wi-Fi (WiFiMulti)...");
+
+    // Configurer le point d'accès principal
+    wifiMulti.addAP(ssid, password);
+
+    // (Optionnel) Ajouter un fallback WiFi : wifiMulti.addAP("FallbackSSID", "FallbackPassword");
+
+    // Amorcer la connexion
+    wifiMulti.run();
 }
 
 void Network_WS::initWebSocket(const char* server_ip, uint16_t server_port) {
@@ -24,10 +29,8 @@ void Network_WS::initWebSocket(const char* server_ip, uint16_t server_port) {
 }
 
 void Network_WS::loop() {
-    // [Correction] Maintenir le Wi-Fi en vie (Reconnexion persistante non-bloquante)
-    if (WiFi.status() != WL_CONNECTED) {
-        // Optionnel: On pourrait ajouter un timer non bloquant pour tenter WiFi.reconnect()
-        // Mais en général, WiFi.begin gère la reconnexion auto dans le background sur ESP32.
+    // Maintenir le Wi-Fi en vie avec WiFiMulti
+    if (wifiMulti.run() != WL_CONNECTED) {
         return;
     }
     webSocket.loop();

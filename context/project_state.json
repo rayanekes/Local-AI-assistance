@@ -46,7 +46,14 @@
     }
   },
 
-  "current_focus": "Développement de l'interface graphique Spotify-like (LVGL) et intégration du lecteur MP3 I2S pour le mode OFFLINE_MP3 du robot, avec un écran ST7789.",
+  "current_focus": "Optimisation de la stabilité matérielle/logicielle : support Multi-WiFi, résolution des conflits de pilotes I2S lors des transitions d'état, application d'un gain micro logiciel, et suppression du bruit de démarrage (hiss) du MAX98357A.",
+
+  "recent_improvements": [
+    "Multi-WiFi : Utilisation de WiFiMulti dans network_ws pour une meilleure stabilité de connexion et le support de multiples points d'accès.",
+    "Fix I2S Driver : Appel systématique de i2s_driver_uninstall avant l'installation pour prévenir l'erreur ESP_ERR_INVALID_STATE lors des changements d'état.",
+    "Gain Micro : Application d'un gain logiciel (x4) avec écrêtage (clipping) sur le buffer du microphone INMP441 dans main.cpp.",
+    "Réduction du Hiss : Utilisation de i2s_zero_dma_buffer après l'initialisation du haut-parleur MAX98357A pour éliminer le bruit (pop/hiss) au démarrage."
+  ],
 
   "testing_tools": {
     "proxy_mic_pc": "Script (backend/tools/proxy_mic_pc.py) qui remplace le micro ESP32 par le micro du PC via 'sounddevice' tout en forwardant les réponses du serveur vers l'ESP32. (Port Proxy: 8766, Port Serveur IA: 8765).",

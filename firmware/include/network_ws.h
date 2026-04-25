@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiMulti.h>
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 
@@ -21,6 +22,7 @@ public:
     static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length);
 
 private:
+    WiFiMulti wifiMulti;
     static WebSocketsClient webSocket;
     static void handleJsonMessage(uint8_t * payload);
 };
