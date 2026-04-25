@@ -2,7 +2,7 @@
 
 Ce projet divise l'architecture du robot en deux parties principales :
 1. **Un Backend (Python) :** Serveur AI basé sur WebSocket avec traitement vocal (Whisper, Silero VAD), génération de texte (LLaMA) et synthèse vocale (Piper).
-2. **Un Firmware (C++) :** Code embarqué pour l'ESP32 contrôlant le microphone, le haut-parleur (I2S), un écran TFT (ILI9341) et des GPIOs.
+2. **Un Firmware (C++) :** Code embarqué pour l'ESP32 contrôlant le microphone, le haut-parleur (I2S), un écran TFT (ST7789) et des GPIOs.
 
 ## Structure du projet
 
@@ -77,11 +77,11 @@ Le robot requiert une connexion précise entre l'ESP32 et les périphériques I2
 | | BCLK | 27 | Bit Clock |
 | | DIN | 22 | Data IN (Données audio entrantes) |
 | | VIN | 5V / VIN | Attention: Préférable d'alimenter avec un Step-Down 5V externe |
-| **Écran (ILI9341 SPI)** | MOSI | 23 | Master Out Slave In |
+| **Écran (ST7789 SPI)** | MOSI | 23 | Master Out Slave In |
 | | MISO | 19 | Master In Slave Out |
 | | SCK | 18 | SPI Clock |
 | | CS | 14 | Chip Select (Écran) |
-| | DC | 2 | Data/Command |
+| | DC | 21 | Data/Command |
 | | RST | 4 | Reset |
 | **Lecteur Carte SD** | CS | 5 | Chip Select (Carte SD) |
 | | MOSI, MISO, SCK | 23, 19, 18 | *Partagés avec le bus SPI de l'écran TFT* |

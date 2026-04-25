@@ -12,7 +12,7 @@ AudioMP3::AudioMP3() : audioI2S(false, 3, I2S_NUM_1), playing(false) {}
 
 void AudioMP3::init() {
     audioI2S.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
-    audioI2S.setVolume(15); // Volume de 0 à 21
+    audioI2S.setVolume(21); // Volume de 0 à 21 (Max)
 }
 
 void AudioMP3::play(const char* filepath) {
@@ -35,10 +35,9 @@ void AudioMP3::stop() {
 void AudioMP3::deinit() {
     audioI2S.stopSong();
     playing = false;
-    // La désinstallation du driver est nécessaire pour éviter les conflits d'état
-    // lors du retour au mode AI, cependant la bibliothèque ESP32-audioI2S ne fournit
-    // pas de méthode directe pour le désinstaller depuis son interface publique.
-    // Mais on nettoie au moins son état d'exécution.
+    // Désinstallation forcée du driver I2S_NUM_1 utilisé par la librairie
+    // pour permettre au haut-parleur IA de reprendre la main.
+    i2s_driver_uninstall(I2S_NUM_1);
 }
 
 void AudioMP3::loop() {

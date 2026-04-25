@@ -16,6 +16,7 @@ public:
 
     // Permet d'envoyer un buffer binaire (audio du micro) au serveur
     void sendAudio(const uint8_t *payload, size_t length);
+    bool isConnected(); // Nouvelle méthode
 
     // Fonction de rappel interne pour la librairie WebSockets
     static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length);

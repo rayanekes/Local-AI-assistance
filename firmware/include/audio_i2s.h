@@ -24,6 +24,8 @@ class Audio_I2S {
 public:
     void initMic();
     void initSpeaker();
+    void uninstallMic();
+    void uninstallSpeaker();
 
     // Fonction pour lire des données depuis le microphone (bloquante ou avec délai)
     size_t readMic(int16_t *buffer, size_t bufferSize);

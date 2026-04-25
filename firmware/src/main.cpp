@@ -1,5 +1,4 @@
-// main.cpp - Hub Central et Orchestrateur FreeRTOS
-
+// main.cpp - Hub Central du Robot IA Vivant
 #include <Arduino.h>
 #include "display_tft.h"
 #include "audio_i2s.h"
@@ -8,323 +7,240 @@
 #include "audio_mp3.h"
 #include "gui_spotify.h"
 
-// --- Variables Globales Mode Hors-Ligne ---
-AudioMP3 mp3Player;
-GuiSpotify spotifyUi;
-bool isMp3ModeInitialized = false;
+#include <WiFiMulti.h>
 
-// --- Configuration Wi-Fi et Serveur ---
-const char* ssid = "VOTRE_SSID";
-const char* password = "VOTRE_PASSWORD";
-const char* ws_server_ip = "192.168.x.x"; // IP de votre PC Pop!_OS
-const uint16_t ws_server_port = 8765;
-
-// --- Instances des Modules ---
-TFT_Display display;
-Audio_I2S audio;
-Network_WS network;
-
-// --- Files d'attente (Queues) FreeRTOS (IPC) ---
-QueueHandle_t emotionQueue;
-QueueHandle_t audioTxQueue; // Serveur -> ESP32 (Haut-parleur)
-QueueHandle_t audioRxQueue; // ESP32 (Micro) -> Serveur
+WiFiMulti wifiMulti;
 
 // --- Architecture Dual-State (Machine à États) ---
 enum SystemState {
-  OFFLINE_MP3, // Mode 1: Serveur IA injoignable. Lecteur MP3 Autonome (Carte SD -> I2S_1). Interface manuelle.
-  ONLINE_AI    // Mode 2: Serveur IA connecté. Full-Duplex WebSockets (I2S_0 + I2S_1). Interface "Visage/Émotions".
+  OFFLINE_MP3, 
+  ONLINE_AI    
 };
-// Modifié pour que le mode en-ligne soit le mode par défaut au boot (ou géré dynamiquement)
-SystemState currentState = ONLINE_AI;
+SystemState currentState = ONLINE_AI; 
 
-// Nouvelle Queue pour le changement d'état "Dual-State"
+// --- Configuration Wi-Fi et Serveur ---
+const char* ssid1 = "LB_ADSL_EGPK";
+const char* pass1 = "TUKhDTzHUmQXMdaUHZ";
+const char* ssid2 = "Linux_ya_jdk";
+const char* pass2 = "https2008";
+
+const char* ws_server_ip_box = "192.168.11.113";
+const char* ws_server_ip_hotspot = "10.42.0.1";
+const uint16_t ws_server_port = 8765;
+
+// --- Instances des Modules (Pointeurs pour la RAM) ---
+TFT_Display* display = nullptr;
+Audio_I2S* audio = nullptr;
+Network_WS* network = nullptr;
+AudioMP3* mp3Player = nullptr;
+GuiSpotify* spotifyUi = nullptr;
+
+QueueHandle_t emotionQueue;
 QueueHandle_t commandQueue;
+QueueHandle_t audioTxQueue;
+QueueHandle_t audioRxQueue;
 
-/*
- * [RÉVISION ARCHITECTURALE - JULES]
- * Décision concernant la librairie GUI pour le Mode MP3 (OFFLINE_MP3) :
- * -> LVGL (Option B) APPROUVÉE SOUS CONDITION DE "TEARDOWN" STRICT.
- *
- * Explication:
- * Suite à l'analyse de l'utilisateur, l'utilisation de LVGL est acceptée.
- * Pour éviter la saturation des 520 Ko de RAM de l'ESP32, nous allons implémenter un "Teardown" dynamique (Allocation/Désallocation totale).
- *
- * Fonctionnement :
- * 1. Le mode "ONLINE_AI" est le mode par défaut.
- * 2. Si l'utilisateur demande la musique au serveur IA, le serveur envoie un JSON : {"command": "start_mp3"}.
- * 3. L'ESP32 reçoit la commande, suspend les tâches I2S Microphone (désallocation des buffers), et alloue dynamiquement
- *    la mémoire de LVGL (lv_init) pour charger la "Mini App Lecteur".
- * 4. Lorsque le Wi-Fi se connecte (ou via un bouton "Quitter" sur le TFT), l'ESP32 déclenche un nettoyage absolu (lv_deinit() ou équivalent),
- *    libérant les ~40Ko de RAM utilisés par la GUI avant de relancer les tâches IA WebSockets.
- */
+bool isMp3ModeInitialized = false;
+String currentEmotion = "neutre";
+bool isSpeaking = false;
 
-// --- Fonctions de basculement d'architecture (State Machine) ---
-void load_lvgl_mp3_app() {
+// --- Callbacks Audio ---
+void audio_info(const char *info){ Serial.print("Audio Info: "); Serial.println(info); }
+
+void load_lvgl_mp3_app(bool from_online_ai = false) {
   if (isMp3ModeInitialized) return;
-  Serial.println("[STATE] Basculement -> OFFLINE_MP3 (Allocating LVGL & Audio)");
-
-  // Le pointeur TFT est public dans display_tft, on va devoir y accéder (ou faire un getter)
-  // Pour la démo, on suppose que l'objet global tft.tft de display est dispo,
-  // on ajoutera un getter dans display_tft.h si ça ne compile pas.
-  spotifyUi.init(display.getTftPointer());
-  spotifyUi.buildInterface();
-
-  mp3Player.init();
-  mp3Player.play("/music/test.mp3"); // Fichier test par défaut
-  spotifyUi.updateTitle("Titre Test", "Artiste Local");
-
+  if (from_online_ai) audio->uninstallSpeaker();
+  spotifyUi->init(display->getTftPointer());
+  spotifyUi->buildInterface();
+  mp3Player->init();
+  if (SD.exists("/test.mp3")) mp3Player->play("/test.mp3");
+  else if (SD.exists("/music/test.mp3")) mp3Player->play("/music/test.mp3");
+  spotifyUi->updateTitle("L'Morphine", "Skit");
   isMp3ModeInitialized = true;
 }
 
 void destroy_lvgl_mp3_app() {
   if (!isMp3ModeInitialized) return;
-  Serial.println("[STATE] Basculement -> ONLINE_AI (Destroying LVGL & Audio)");
-
-  mp3Player.deinit();
-  spotifyUi.deinit();
-
-  // Nettoyer l'écran après la fermeture de l'UI
-  display.getTftPointer()->fillScreen(TFT_BLACK);
-
+  mp3Player->deinit();
+  spotifyUi->deinit();
+  display->getTftPointer()->fillScreen(TFT_BLACK);
   isMp3ModeInitialized = false;
 }
 
-// Variables globales pour stocker l'état visuel
-String currentEmotion = "";
-bool isSpeaking = false;
-
-// ==========================================
-// TÂCHES FREERTOS
-// ==========================================
-
-// --- Tâche : Cerveau / Orchestrateur de Commandes ---
-// Gère les commandes "start_mp3" et "stop_mp3" depuis le WebSocket
 void orchestratorTask(void *pvParameters) {
-  char receivedCommand[32];
+  char cmdBuf[32];
   for(;;) {
-    if (xQueueReceive(commandQueue, &receivedCommand, portMAX_DELAY) == pdPASS) {
-      String cmd = String(receivedCommand);
-      if (cmd == "start_mp3" && currentState != OFFLINE_MP3) {
-        currentState = OFFLINE_MP3;
-        // La gestion du basculement se fera dans displayTask pour éviter les conflits SPI et FreeRTOS
-      } else if (cmd == "stop_mp3" && currentState != ONLINE_AI) {
-        currentState = ONLINE_AI;
-      }
+    if (xQueueReceive(commandQueue, &cmdBuf, portMAX_DELAY) == pdPASS) {
+      String cmd = String(cmdBuf);
+      if (cmd == "start_mp3") currentState = OFFLINE_MP3;
+      else if (cmd == "stop_mp3") currentState = ONLINE_AI;
     }
   }
 }
 
-// --- Tâche : Affichage TFT (Core 1) ---
-// Gère l'affichage asynchrone et les animations (clignements)
 void displayTask(void *pvParameters) {
-  display.init();
-  lv_init(); // Initialisé une seule fois au boot pour éviter les fuites de mémoire
-
-  char receivedEmotion[32];
-  int currentFrame = 1;
-  unsigned long lastAnimTime = 0;
-
-  SystemState lastHandledState = ONLINE_AI;
-
-  // Par défaut, l'émotion de démarrage
-  currentEmotion = "neutre";
-  display.displayEmotion(currentEmotion, currentFrame);
+  display->init();
+  lv_init();
+  SystemState lastState = ONLINE_AI;
+  
+  if (currentState == ONLINE_AI) display->displayEmotion(currentEmotion, 1);
+  else load_lvgl_mp3_app(false);
 
   for (;;) {
-    // Gestion des transitions d'état de manière thread-safe dans la tâche d'affichage
-    if (currentState != lastHandledState) {
-      if (currentState == OFFLINE_MP3) {
-        load_lvgl_mp3_app();
-      } else if (currentState == ONLINE_AI) {
+    if (currentState != lastState) {
+      if (currentState == OFFLINE_MP3) load_lvgl_mp3_app(true);
+      else {
         destroy_lvgl_mp3_app();
-
-        // Reconfigurer le taux d'échantillonnage de l'I2S pour le TTS IA
-        audio.initSpeaker();
-
-        // Reset visuel (sans appeler display.init() pour éviter les fuites SD)
-        currentEmotion = "neutre";
-        display.displayEmotion(currentEmotion, 1);
+        audio->initSpeaker();
+        display->displayEmotion("neutre", 1);
       }
-      lastHandledState = currentState;
+      lastState = currentState;
     }
 
-    // Si on est en mode MP3, on ne gère pas les visages AI mais on gère LVGL et l'Audio I2S
     if (currentState == OFFLINE_MP3) {
       if (isMp3ModeInitialized) {
-          // Mise à jour de l'UI avec les temps audio
-          uint32_t currentTime = mp3Player.getAudioCurrentTime();
-          uint32_t duration = mp3Player.getAudioFileDuration();
-          spotifyUi.updateProgress(currentTime, duration);
-          spotifyUi.togglePlayPauseIcon(mp3Player.isPlaying());
-
-          lv_task_handler(); // Gestion LVGL
-          mp3Player.loop();  // Remplissage du buffer I2S depuis la SD
+        spotifyUi->updateProgress(mp3Player->getAudioCurrentTime(), mp3Player->getAudioFileDuration());
+        spotifyUi->togglePlayPauseIcon(mp3Player->isPlaying());
+        lv_task_handler();
+        mp3Player->loop();
+        if (spotifyUi->isPlayBtnClicked) { spotifyUi->isPlayBtnClicked = false; mp3Player->pause(); }
       }
-      vTaskDelay(5 / portTICK_PERIOD_MS); // Tick rapide pour LVGL et I2S
+      lv_tick_inc(5);
+      vTaskDelay(5 / portTICK_PERIOD_MS);
       continue;
     }
 
-    // Timeout court (50ms)
+    char receivedEmotion[32];
     if (xQueueReceive(emotionQueue, &receivedEmotion, 50 / portTICK_PERIOD_MS) == pdPASS) {
-      String newEmotion = String(receivedEmotion);
-
-      if (newEmotion == "parle") {
-        isSpeaking = true;
-      } else if (newEmotion == "idle") {
-        isSpeaking = false;
-        // Restaurer l'émotion actuelle
-        display.displayEmotion(currentEmotion, currentFrame);
-      } else {
-        currentEmotion = newEmotion;
-      }
-
-      // Toujours commencer par la frame 1 lors d'un changement
-      currentFrame = 1;
-      lastAnimTime = millis();
-
-      String emotionToDisplay = isSpeaking ? "parle" : currentEmotion;
-      display.displayEmotion(emotionToDisplay, currentFrame);
-
-    } else {
-      // Gestion de l'animation de l'émotion en cours
-      String emotionToDisplay = isSpeaking ? "parle" : currentEmotion;
-
-      // La bouche s'anime beaucoup plus vite (200ms) que les yeux (2000ms/300ms)
-      unsigned long animDelay;
-      if (isSpeaking) {
-        animDelay = 200;
-      } else {
-        animDelay = (currentFrame == 1) ? 2000 : 300;
-      }
-
-      if (millis() - lastAnimTime > animDelay) {
-        currentFrame = (currentFrame == 1) ? 2 : 1;
-        display.displayEmotion(emotionToDisplay, currentFrame);
-        lastAnimTime = millis();
-      }
+      String em = String(receivedEmotion);
+      if (em == "parle") isSpeaking = true;
+      else if (em == "idle") isSpeaking = false;
+      else currentEmotion = em;
+      display->displayEmotion(isSpeaking ? "parle" : currentEmotion, 1);
     }
-  }
-}
-
-// --- Tâche : Réseau Wi-Fi & WebSocket (Core 0) ---
-// Gère la connexion et l'envoi thread-safe des flux montants
-void networkTask(void *pvParameters) {
-  network.initWiFi(ssid, password);
-  network.initWebSocket(ws_server_ip, ws_server_port);
-
-  AudioChunk rxChunk;
-
-  for (;;) {
-    network.loop();
-
-    // Vérifier si la tâche micro a envoyé de l'audio à transmettre
-    if (xQueueReceive(audioRxQueue, &rxChunk, 0) == pdPASS) {
-      if (rxChunk.data != NULL) {
-        network.sendAudio(rxChunk.data, rxChunk.length);
-        free(rxChunk.data); // Libérer la mémoire allouée par micTask
-      }
-    }
-
     vTaskDelay(10 / portTICK_PERIOD_MS);
   }
 }
 
-// --- Tâche : Audio Micro INMP441 -> Serveur (Core 1) ---
-void micTask(void *pvParameters) {
-  audio.initMic();
+void networkTask(void *pvParameters) {
+  wifiMulti.addAP(ssid1, pass1);
+  wifiMulti.addAP(ssid2, pass2);
 
-  const size_t bufferSize = 1024;
+  Serial.println("Recherche Wi-Fi...");
+  while (wifiMulti.run() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
 
+  String currentIP = WiFi.localIP().toString();
+  const char* targetIP = currentIP.startsWith("10.42.") ? ws_server_ip_hotspot : ws_server_ip_box;
+  
+  Serial.print("\nWi-Fi OK: "); Serial.println(WiFi.SSID());
+  Serial.print("IP Robot: "); Serial.println(currentIP);
+  Serial.print("Serveur cible: "); Serial.println(targetIP);
+
+  network->initWebSocket(targetIP, ws_server_port);
+  
+  AudioChunk rxChunk;
   for (;;) {
-    // Si on est en mode Lecteur MP3, on suspend la capture micro pour économiser CPU/RAM
-    if (currentState == OFFLINE_MP3) {
-      vTaskDelay(100 / portTICK_PERIOD_MS);
-      continue;
+    network->loop();
+    if (xQueueReceive(audioRxQueue, &rxChunk, 0) == pdPASS) {
+      if (rxChunk.data) { network->sendAudio(rxChunk.data, rxChunk.length); free(rxChunk.data); }
     }
+    vTaskDelay(10 / portTICK_PERIOD_MS);
+  }
+}
 
-    // On alloue un buffer pour chaque lecture
-    int16_t* micBuffer = (int16_t*)malloc(bufferSize);
-
-    if (micBuffer != NULL) {
-      size_t bytesRead = audio.readMic(micBuffer, bufferSize);
-
-      if (bytesRead > 0) {
-        AudioChunk chunk;
-        chunk.data = (uint8_t*)micBuffer;
-        chunk.length = bytesRead;
-
-        // Envoyer à networkTask de manière sécurisée
-        if (xQueueSend(audioRxQueue, &chunk, 0) != pdPASS) {
-          free(micBuffer); // Queue pleine = on drop le paquet
-        }
-      } else {
-        free(micBuffer);
-      }
+void micTask(void *pvParameters) {
+  audio->initMic();
+  for (;;) {
+    // Si on est en mode Lecteur MP3 OU si on n'est pas encore connecté au serveur IA, on attend.
+    // Cela évite de saturer le buffer réseau pendant le "Handshake" WebSocket.
+    if (currentState == OFFLINE_MP3 || !network->isConnected()) { 
+      vTaskDelay(100 / portTICK_PERIOD_MS); 
+      continue; 
+    }
+    
+    int16_t* buf = (int16_t*)malloc(1024);
+    if (buf) {
+      size_t r = audio->readMic(buf, 1024);
+      if (r > 0) {
+        AudioChunk c = {(uint8_t*)buf, r};
+        if (xQueueSend(audioRxQueue, &c, 0) != pdPASS) free(buf);
+      } else free(buf);
     }
     vTaskDelay(1 / portTICK_PERIOD_MS);
   }
 }
 
-// --- Tâche : Serveur -> Haut-Parleur MAX98357A (Core 1) ---
 void speakerTask(void *pvParameters) {
-  audio.initSpeaker();
-
+  // On n'initialise pas ici, on attend que networkTask nous donne le feu vert
   AudioChunk txChunk;
-
   for (;;) {
-    // Si on est en mode MP3, la bibliothèque externe gère l'I2S, on ignore les packets réseau
     if (currentState == OFFLINE_MP3) {
-      if (xQueueReceive(audioTxQueue, &txChunk, 100 / portTICK_PERIOD_MS) == pdPASS) {
-         if (txChunk.data != NULL) free(txChunk.data); // Drop silent
-      }
+      if (xQueueReceive(audioTxQueue, &txChunk, 100) == pdPASS && txChunk.data) free(txChunk.data);
       continue;
     }
-
-    // Attendre qu'un paquet audio arrive depuis le réseau
-    if (xQueueReceive(audioTxQueue, &txChunk, portMAX_DELAY) == pdPASS) {
-      if (txChunk.data != NULL) {
-        // Écrire la taille exacte reçue du serveur
-        audio.writeSpeaker(txChunk.data, txChunk.length);
-        free(txChunk.data);
+    
+    if (xQueueReceive(audioTxQueue, &txChunk, 100) == pdPASS && txChunk.data) {
+      // Initialisation à la volée du haut-parleur si nécessaire
+      static bool spk_ready = false;
+      if (!spk_ready) {
+          audio->initSpeaker();
+          spk_ready = true;
       }
+      
+      if (currentState == ONLINE_AI) audio->writeSpeaker(txChunk.data, txChunk.length);
+      free(txChunk.data);
     }
   }
 }
-
-// ==========================================
-// SETUP & LOOP (Hub Central)
-// ==========================================
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n--- Démarrage du Client ESP32 Robot IA ---");
+  
+  // ÉTEINDRE LE SOUFFLE IMMÉDIATEMENT
+  pinMode(22, OUTPUT); 
+  digitalWrite(22, LOW); // Force la ligne DIN à la masse
 
-  // Initialisation des Files d'Attente (IPC)
-  emotionQueue = xQueueCreate(5, sizeof(char[32]));
-  commandQueue = xQueueCreate(5, sizeof(char[32]));
+  // SÉCURITÉ DU BUS SPI
+  pinMode(14, OUTPUT); digitalWrite(14, HIGH); // TFT_CS
+  pinMode(13, OUTPUT); digitalWrite(13, HIGH); // TOUCH_CS
+  pinMode(5, OUTPUT);  digitalWrite(5, HIGH);  // SD_CS
+
+  // Correction I2S critique
+  i2s_driver_uninstall(I2S_NUM_1);
+  i2s_driver_uninstall(I2S_NUM_0);
+  
+  delay(500);
+  SPI.begin(18, 19, 23, 5);
+  
+  int retry = 0;
+  while (!SD.begin(5, SPI, 4000000) && retry < 3) { // 4 MHz maximum pour la stabilité
+      Serial.println("SD_RETRY...");
+      delay(500);
+      retry++;
+  }
+  
+  if (retry >= 3) Serial.println("SD_FAIL_DEFINITIVE");
+  else Serial.println("SD_OK_SETUP");
+  
+  display = new TFT_Display();
+  audio = new Audio_I2S();
+  network = new Network_WS();
+  mp3Player = new AudioMP3();
+  spotifyUi = new GuiSpotify();
+
+  emotionQueue = xQueueCreate(5, 32);
+  commandQueue = xQueueCreate(5, 32);
   audioTxQueue = xQueueCreate(10, sizeof(AudioChunk));
   audioRxQueue = xQueueCreate(10, sizeof(AudioChunk));
 
-  if (emotionQueue == NULL || audioTxQueue == NULL || audioRxQueue == NULL || commandQueue == NULL) {
-    Serial.println("Erreur critique: Création des Queues FreeRTOS échouée.");
-    while (1);
-  }
-
-  // Lancement de la tâche Réseau sur le Core 0
-  xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
-
-  // Lancement de la tâche d'Orchestration (State Machine) sur Core 1
-  xTaskCreatePinnedToCore(orchestratorTask, "OrchestratorTask", 2048, NULL, 1, NULL, 1);
-
-  // Lancement des tâches Matérielles sur le Core 1
-  xTaskCreatePinnedToCore(displayTask, "DisplayTask", 4096, NULL, 1, NULL, 1);
-  xTaskCreatePinnedToCore(micTask, "MicTask", 4096, NULL, 2, NULL, 1);
-  xTaskCreatePinnedToCore(speakerTask, "SpeakerTask", 4096, NULL, 3, NULL, 1); // Plus haute priorité pour l'audio
-
-  Serial.println("Toutes les tâches FreeRTOS sont lancées !");
+  xTaskCreatePinnedToCore(networkTask, "Net", 8192, NULL, 1, NULL, 0);
+  xTaskCreatePinnedToCore(orchestratorTask, "Orc", 2048, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(displayTask, "Disp", 6144, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(micTask, "Mic", 4096, NULL, 2, NULL, 1);
+  xTaskCreatePinnedToCore(speakerTask, "Spk", 4096, NULL, 3, NULL, 1);
 }
 
-void loop() {
-  // Le main.cpp est désormais vide, FreeRTOS gère tout via ses tâches.
-  vTaskDelete(NULL); // Détruit la tâche loop() par défaut pour économiser de la RAM
-}
+void loop() { vTaskDelete(NULL); }

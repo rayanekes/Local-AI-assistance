@@ -3,6 +3,8 @@
 
 // Le pointeur TFT est stocké globalement *seulement pour le callback LVGL*
 static TFT_eSPI* global_tft_ptr = nullptr;
+static lv_indev_drv_t indev_drv; // Driver pour le tactile
+static lv_indev_t* indev_touchpad;
 
 // Callback de dessin matériel pour LVGL v8
 static void my_disp_flush(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_t *color_p) {
@@ -18,12 +20,35 @@ static void my_disp_flush(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_col
     lv_disp_flush_ready(disp_drv);
 }
 
+// Callback de lecture tactile pour LVGL v8
+static void my_touchpad_read(lv_indev_drv_t * indev_driver, lv_indev_data_t * data) {
+    uint16_t touchX = 0, touchY = 0;
+    bool touched = false;
+
+    if (global_tft_ptr) {
+        touched = global_tft_ptr->getTouch(&touchX, &touchY);
+        if (touched) {
+            Serial.printf("Tactile capté : X=%d, Y=%d\n", touchX, touchY);
+        }
+    }
+
+    if (!touched) {
+        data->state = LV_INDEV_STATE_REL;
+    } else {
+        data->state = LV_INDEV_STATE_PR;
+        // Inversion ou mapping manuel si nécessaire
+        data->point.x = touchX;
+        data->point.y = touchY;
+    }
+}
+
 void GuiSpotify::init(TFT_eSPI* tft) {
     _tft = tft;
     global_tft_ptr = tft;
 
-    // lv_init(); doit être appelé une seule fois au boot (dans displayTask), pas ici
-    // pour éviter les fuites mémoires répétées.
+    // Configuration de la calibration tactile par défaut (peut nécessiter un ajustement)
+    uint16_t calData[5] = { 275, 3620, 264, 3532, 1 };
+    _tft->setTouch(calData);
 
     // Allocation dynamique d'un buffer de 1/10 d'écran (assez pour un ST7789 sur ESP32)
     buf1 = (lv_color_t*)heap_caps_malloc(screenWidth * 24 * sizeof(lv_color_t), MALLOC_CAP_DMA);
@@ -38,6 +63,19 @@ void GuiSpotify::init(TFT_eSPI* tft) {
     disp_drv->flush_cb = my_disp_flush;
     disp_drv->draw_buf = draw_buf;
     disp = lv_disp_drv_register(disp_drv);
+
+    // Initialisation du pilote tactile
+    lv_indev_drv_init(&indev_drv);
+    indev_drv.type = LV_INDEV_TYPE_POINTER;
+    indev_drv.read_cb = my_touchpad_read;
+    indev_touchpad = lv_indev_drv_register(&indev_drv);
+}
+
+static void play_event_cb(lv_event_t * e) {
+    GuiSpotify * ui = (GuiSpotify *)lv_event_get_user_data(e);
+    if (ui) {
+        ui->isPlayBtnClicked = true;
+    }
 }
 
 void GuiSpotify::buildInterface() {
@@ -77,6 +115,7 @@ void GuiSpotify::buildInterface() {
     lv_obj_set_style_radius(play_btn, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(play_btn, lv_color_white(), 0);
     lv_obj_align(play_btn, LV_ALIGN_BOTTOM_MID, 0, -20);
+    lv_obj_add_event_cb(play_btn, play_event_cb, LV_EVENT_CLICKED, this);
 
     play_btn_label = lv_label_create(play_btn);
     lv_label_set_text(play_btn_label, "||"); // "||" pour pause, ">" pour play

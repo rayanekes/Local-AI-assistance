@@ -13,6 +13,8 @@ public:
     void togglePlayPauseIcon(bool isPlaying);
     void deinit(); // Pour libérer la RAM lors du retour au mode IA
 
+    bool isPlayBtnClicked = false; // Flag pour main.cpp
+
 private:
     TFT_eSPI* _tft;
     static const uint16_t screenWidth  = 320;

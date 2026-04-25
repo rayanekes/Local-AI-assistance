@@ -91,15 +91,14 @@ SAMPLE_RATE_MIC = 16000
 SAMPLE_RATE_TTS = 22050
 CHUNK_SIZE_MIC = 1024
 
-# Supporte à la fois le fichier unique et le premier fichier d'un modèle divisé (split)
-LLM_MODEL_PATH = os.path.join(MODELS_DIR, "qwen2.5-7b-instruct-q4_k_m.gguf")
-LLM_MODEL_PATH_SPLIT = os.path.join(MODELS_DIR, "qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf")
-WHISPER_MODEL = "medium" # Modèle plus grand pour une meilleure détection, tout en gérant la VRAM (6GB)
+# Utilisation du modèle 3B (Léger et stable pour 6GB VRAM)
+LLM_MODEL_PATH = os.path.join(MODELS_DIR, "qwen2.5-3b-instruct-q5_k_m.gguf")
+WHISPER_MODEL = "medium" 
 WHISPER_DEVICE = "cuda"
 
 import shutil
 
-PIPER_BIN = "piper" # Utilise la commande pip globale (piper-tts)
+PIPER_BIN = "/home/rayane/tts_env/bin/piper" # Utilise le binaire de l'environnement virtuel
 PIPER_MODEL = os.path.join(BASE_DIR, "piper", "fr_FR-siwis-medium.onnx")
 
 memoire_dynamique = charger_memoire()
@@ -110,14 +109,16 @@ SYSTEM_PROMPT = (
     "The user's input will be provided in English (translated from Moroccan Darija and French). "
     "You must understand perfectly, BUT you MUST reply ONLY in pure and natural French. "
     "Never generate words in Arabic or English in your spoken response. "
-    "You also control a hardware system with an ILI9341 TFT screen. "
+    "You also control a hardware system with an ILI9341 TFT screen and an integrated MP3 player. "
     "You MUST ALWAYS respond with a strictly valid JSON object in the following format:\n"
     "{\n"
     "  \"speech\": \"Texte en français pur pour le robot.\",\n"
     "  \"emotion\": \"joie|neutre|triste\",\n"
+    "  \"command\": \"start_mp3|none\",\n"
     "  \"gpio_commands\": [{\"pin\": 4, \"state\": true}]\n"
     "}\n"
-    "Return NOTHING except the valid JSON."
+    "Use \"command\": \"start_mp3\" ONLY if the user explicitly asks to play music or start the player. "
+    "Otherwise, use \"none\". Return NOTHING except the valid JSON."
 )
 
 conversation_history = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -130,18 +131,9 @@ import sys
 import concurrent.futures
 
 # Détermination automatique du bon fichier LLM à charger
-if os.path.exists(LLM_MODEL_PATH_SPLIT):
-    actual_llm_path = LLM_MODEL_PATH_SPLIT
-elif os.path.exists(LLM_MODEL_PATH):
-    actual_llm_path = LLM_MODEL_PATH
-else:
+actual_llm_path = LLM_MODEL_PATH
+if not os.path.exists(actual_llm_path):
     print(f"\n❌ ERREUR CRITIQUE : Modèle IA (GGUF) introuvable dans '{MODELS_DIR}'.")
-    print(f"-> Veuillez y placer '{os.path.basename(LLM_MODEL_PATH)}' OU '{os.path.basename(LLM_MODEL_PATH_SPLIT)}'.")
-    sys.exit(1)
-
-if not shutil.which(PIPER_BIN):
-    print("\n❌ ERREUR CRITIQUE : Exécutable système 'piper' introuvable.")
-    print("-> Assurez-vous d'avoir exécuté : pip install piper-tts")
     sys.exit(1)
 
 if not os.path.exists(PIPER_MODEL):
@@ -200,15 +192,12 @@ def load_vad():
     print("✅ Silero VAD chargé")
     return model
 
-# Lancer le chargement dans 3 threads parallèles (Diminue la latence de démarrage (I/O))
-with concurrent.futures.ThreadPoolExecutor() as executor:
-    future_whisper = executor.submit(load_whisper)
-    future_llama = executor.submit(load_llama)
-    future_vad = executor.submit(load_vad)
+# Chargement séquentiel sécurisé pour éviter les conflits CUDA/VRAM au boot
+vad_model = load_vad()
+llm = load_llama()
+whisper = load_whisper()
 
-    whisper = future_whisper.result()
-    llm = future_llama.result()
-    vad_model = future_vad.result()
+print("\n🚀 TOUS LES MODÈLES SONT PRÊTS. Serveur WebSocket en attente...")
 
 # =========================
 # OUTILS
@@ -254,6 +243,7 @@ def split_tts_sentence(buffer):
 # =========================
 
 async def handle_esp32_connection(websocket):
+    print(f"🔌 [SERVEUR] Nouveau robot connecté depuis {websocket.remote_address}")
     is_speaking = False
     robot_is_answering = False
     interrupt_flag = False
@@ -265,6 +255,8 @@ async def handle_esp32_connection(websocket):
     silence_threshold = 20
     MAX_RECORDING_TIME = 30.0 # [Correction] Timeout de sécurité en secondes
     recording_start_time = 0
+    
+    total_chunks_received = 0
 
     async def send_json_command(key, value):
         # Envoie un JSON plat, ex: {"status": "thinking"} ou {"emotion": "joie"}
@@ -315,6 +307,7 @@ async def handle_esp32_connection(websocket):
         tts_buffer = ""
         full_llm_response = ""
         emotion_sent = False
+        command_sent = False
 
         piper_proc = await asyncio.create_subprocess_exec(
             PIPER_BIN, "--model", PIPER_MODEL, "--output_raw",
@@ -360,6 +353,13 @@ async def handle_esp32_connection(websocket):
                         await send_json_command("emotion", emotion_match.group(1))
                         emotion_sent = True
 
+                # N'envoyer la commande qu'une seule fois par réponse
+                if not command_sent:
+                    command_match = re.search(r'"command"\s*:\s*"([^"]+)"', full_llm_response)
+                    if command_match and command_match.group(1) != "none":
+                        await send_json_command("command", command_match.group(1))
+                        command_sent = True
+
                 speech_part = extractor.extract_chunk(token)
                 if speech_part:
                     speech_part = speech_part.replace('\\n', ' ').replace('\\"', '"')
@@ -395,15 +395,23 @@ async def handle_esp32_connection(websocket):
     try:
         async for message in websocket:
             if type(message) is bytes:
+                total_chunks_received += 1
+                if total_chunks_received % 100 == 0:
+                    print(f"🎤 [AUDIO] Reçu {total_chunks_received} paquets du robot...")
+                
                 chunk = np.frombuffer(message, dtype=np.int16)
                 audio_tensor = torch.from_numpy(chunk.astype(np.float32) / 32768.0)
 
-                # Abaissement du seuil de probabilité pour détecter la voix plus facilement (par défaut c'est souvent 0.5)
+                # Calcul de l'énergie (RMS) pour le diagnostic
+                rms = np.sqrt(np.mean(audio_tensor.numpy()**2))
+                
+                # Abaissement du seuil de probabilité pour détecter la voix plus facilement
                 timestamps = await asyncio.to_thread(get_speech_timestamps, audio_tensor, vad_model, sampling_rate=SAMPLE_RATE_MIC, threshold=0.3)
                 voice_detected = len(timestamps) > 0
 
-                # Calcul de l'énergie (RMS) pour l'AEC heuristique
-                rms = np.sqrt(np.mean(audio_tensor.numpy()**2))
+                if total_chunks_received % 100 == 0:
+                    status = "VOIX 🎤" if voice_detected else "SILENCE 😶"
+                    print(f"🎤 [AUDIO] Vol: {rms:.4f} | {status} | Total: {total_chunks_received}")
 
                 if not is_speaking:
                     pre_roll.append(chunk)

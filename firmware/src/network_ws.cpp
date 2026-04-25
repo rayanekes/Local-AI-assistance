@@ -33,8 +33,14 @@ void Network_WS::loop() {
     webSocket.loop();
 }
 
+bool Network_WS::isConnected() {
+    return webSocket.isConnected();
+}
+
 void Network_WS::sendAudio(const uint8_t *payload, size_t length) {
-    webSocket.sendBIN(payload, length);
+    if (webSocket.isConnected()) {
+        webSocket.sendBIN(payload, length);
+    }
 }
 
 void Network_WS::handleJsonMessage(uint8_t * payload) {

@@ -43,8 +43,8 @@ def create_face(filename, emotion, frame=1):
 
     # --- DESSIN DES YEUX ET BOUCHE ---
     if emotion == "neutre":
-        draw.rectangle(left_eye, fill=main_color, radius=10) # Bords arrondis
-        draw.rectangle(right_eye, fill=main_color, radius=10)
+        draw.rounded_rectangle(left_eye, fill=main_color, radius=10) # Bords arrondis
+        draw.rounded_rectangle(right_eye, fill=main_color, radius=10)
         draw.line([100, 180, 220, 180], fill=main_color, width=12)
 
     elif emotion == "joie":
@@ -59,8 +59,8 @@ def create_face(filename, emotion, frame=1):
         draw.arc([100, 120, 220, 200], start=0, end=180, fill=main_color, width=20)
 
     elif emotion == "triste":
-        draw.rectangle(left_eye, fill=main_color, radius=5)
-        draw.rectangle(right_eye, fill=main_color, radius=5)
+        draw.rounded_rectangle(left_eye, fill=main_color, radius=5)
+        draw.rounded_rectangle(right_eye, fill=main_color, radius=5)
         # Larmes animées
         if frame == 2:
             draw.ellipse([90, 130, 110, 150], fill=(50, 200, 255))
@@ -68,8 +68,8 @@ def create_face(filename, emotion, frame=1):
         draw.arc([100, 160, 220, 230], start=180, end=360, fill=main_color, width=15)
 
     elif emotion == "parle":
-        draw.rectangle(left_eye, fill=main_color, radius=10)
-        draw.rectangle(right_eye, fill=main_color, radius=10)
+        draw.rounded_rectangle(left_eye, fill=main_color, radius=10)
+        draw.rounded_rectangle(right_eye, fill=main_color, radius=10)
         # Bouche qui s'anime
         mouth_h = 10 if frame == 1 else 50
         draw.ellipse([120, 160, 200, 160 + mouth_h], fill=(255, 50, 50)) # Intérieur rouge

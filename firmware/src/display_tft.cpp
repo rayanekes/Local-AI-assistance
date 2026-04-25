@@ -3,23 +3,21 @@
 TFT_Display::TFT_Display() : tft(TFT_eSPI()) {}
 
 void TFT_Display::init() {
+  // Reset matériel forcé (indispensable pour certains ST7789)
+  pinMode(4, OUTPUT);
+  digitalWrite(4, LOW);
+  delay(100);
+  digitalWrite(4, HIGH);
+  delay(100);
+
   // Initialisation du TFT
   tft.init();
-  tft.setRotation(1); // Format paysage
+  tft.setRotation(1); 
   tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextColor(TFT_CYAN, TFT_BLACK);
   tft.setTextSize(2);
   tft.setCursor(10, 10);
-  tft.println("Robot AI Booting...");
-
-  // Initialisation de la carte SD
-  if (!SD.begin(SD_CS)) {
-    Serial.println("Erreur: Carte SD introuvable ou erreur SPI.");
-    tft.println("Erreur SD!");
-  } else {
-    Serial.println("Carte SD initialisée.");
-    tft.println("SD OK!");
-  }
+  tft.println("Robot IA en ligne !");
 }
 
 void TFT_Display::displayEmotion(String emotion, int frame) {
