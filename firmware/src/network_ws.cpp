@@ -20,6 +20,7 @@ void Network_WS::initWebSocket(const char* server_ip, uint16_t server_port) {
     webSocket.begin(server_ip, server_port, "/");
     webSocket.onEvent(webSocketEvent);
     webSocket.setReconnectInterval(5000); // Reconnexion auto après 5s
+    webSocket.enableHeartbeat(0, 0, 0); // Désactiver ping_interval/timeout pour éviter déconnexions intempestives
     Serial.println("WebSocket Client initialisé.");
 }
 
@@ -39,7 +40,11 @@ bool Network_WS::isConnected() {
 
 void Network_WS::sendAudio(const uint8_t *payload, size_t length) {
     if (webSocket.isConnected()) {
-        webSocket.sendBIN(payload, length);
+        bool success = webSocket.sendBIN(payload, length);
+        if (!success) {
+            // Si l'envoi échoue (buffer plein), on ne bloque pas, on ignore juste ce morceau de micro
+            // Cela empêche le crash 'errno 11' et le redémarrage.
+        }
     }
 }
 

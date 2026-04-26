@@ -7,459 +7,260 @@ import numpy as np
 import torch
 import scipy.io.wavfile as wav
 from collections import deque
-
+import sys
+import time
 from faster_whisper import WhisperModel
 from silero_vad import load_silero_vad, get_speech_timestamps
 from llama_cpp import Llama
+from typing import Optional, List, Dict, Any
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-# =========================
-# GESTION MÉMOIRE DYNAMIQUE (RAG)
-# =========================
-
-MEMORY_FILE = os.path.join(BASE_DIR, "memory", "memoire_utilisateur.json")
-
-def charger_memoire():
-    if os.path.exists(MEMORY_FILE):
-        try:
-            with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
-                mem = json.load(f)
-                return mem.get("contexte_utilisateur", "Aucun contexte particulier.")
-        except Exception as e:
-            pass
-    return "L'utilisateur est un étudiant/ingénieur travaillant sur un ESP32."
-
-def sauvegarder_memoire(nouveau_contexte):
-    with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
-        json.dump({"contexte_utilisateur": nouveau_contexte},
-                  f, ensure_ascii=False, indent=4)
-
-async def synthese_memoire_background(nouvelle_info, llm_instance):
-    mem_actuelle = charger_memoire()
-
-    prompt_synthese = (
-        f"Tu es un module cognitif. Voici la mémoire actuelle de l'utilisateur: '{mem_actuelle}'. "
-        f"Voici la dernière information de la conversation: '{nouvelle_info}'. "
-        "Mets à jour la mémoire globale en une phrase concise en français, sans aucun format JSON."
-    )
-
-    try:
-        def run_llm():
-            return llm_instance.create_chat_completion(
-                messages=[{"role": "system", "content": prompt_synthese}],
-                max_tokens=50,
-                temperature=0.3
-            )
-
-        res = await asyncio.to_thread(run_llm)
-        nouveau_contexte = res["choices"][0]["message"]["content"].strip()
-        await asyncio.to_thread(sauvegarder_memoire, nouveau_contexte)
-
-        # [Correction d'urgence] : Réinjecter la nouvelle mémoire dans le prompt système en direct
-        global conversation_history
-        nouveau_system_prompt = (
-            "You are an interactive engineering robot assistant. "
-            f"Here is what you know about the user so far: {nouveau_contexte}\n"
-            "The user's input will be provided in English (translated from Moroccan Darija and French). "
-            "You must understand perfectly, BUT you MUST reply ONLY in pure and natural French. "
-            "Never generate words in Arabic or English in your spoken response. "
-            "You also control a hardware system with an ILI9341 TFT screen. "
-            "You MUST ALWAYS respond with a strictly valid JSON object in the following format:\n"
-            "{\n"
-            "  \"speech\": \"Texte en français pur pour le robot.\",\n"
-            "  \"emotion\": \"joie|neutre|triste\",\n"
-            "  \"gpio_commands\": [{\"pin\": 4, \"state\": true}]\n"
-            "}\n"
-            "Return NOTHING except the valid JSON."
-        )
-        if len(conversation_history) > 0 and conversation_history[0]["role"] == "system":
-            conversation_history[0]["content"] = nouveau_system_prompt
-
-    except Exception as e:
-        pass
-
-# =========================
-# CONFIGURATION MATÉRIEL
-# =========================
-
-# Le dossier des modèles lourds est mutualisé à l'extérieur du dépôt Git pour éviter la duplication
 MODELS_DIR = os.path.expanduser("~/projet_robot/models")
-INPUT_WAV = os.path.join(BASE_DIR, "input.wav")
+PIPER_BIN = "/home/rayane/tts_env/bin/piper"
+PIPER_MODEL = os.path.join(BASE_DIR, "piper", "fr_FR-siwis-medium.onnx")
 
 SAMPLE_RATE_MIC = 16000
 SAMPLE_RATE_TTS = 22050
 CHUNK_SIZE_MIC = 1024
+AUDIO_CHUNK_SIZE_OUT = 4096
 
-# Utilisation du modèle 3B (Léger et stable pour 6GB VRAM)
+# Verrou LLM pour la thread-safety (FIX-008)
+llm_lock = asyncio.Lock()
+
+# =========================
+# INITIALISATION ML
+# =========================
+
 LLM_MODEL_PATH = os.path.join(MODELS_DIR, "qwen2.5-3b-instruct-q5_k_m.gguf")
-WHISPER_MODEL = "medium" 
+WHISPER_MODEL = "medium"
 WHISPER_DEVICE = "cuda"
 
-import shutil
-
-PIPER_BIN = "/home/rayane/tts_env/bin/piper" # Utilise le binaire de l'environnement virtuel
-PIPER_MODEL = os.path.join(BASE_DIR, "piper", "fr_FR-siwis-medium.onnx")
-
-memoire_dynamique = charger_memoire()
-
-SYSTEM_PROMPT = (
-    "You are an interactive engineering robot assistant. "
-    f"Here is what you know about the user so far: {memoire_dynamique}\n"
-    "The user's input will be provided in English (translated from Moroccan Darija and French). "
-    "You must understand perfectly, BUT you MUST reply ONLY in pure and natural French. "
-    "Never generate words in Arabic or English in your spoken response. "
-    "You also control a hardware system with an ILI9341 TFT screen and an integrated MP3 player. "
-    "You MUST ALWAYS respond with a strictly valid JSON object in the following format:\n"
-    "{\n"
-    "  \"speech\": \"Texte en français pur pour le robot.\",\n"
-    "  \"emotion\": \"joie|neutre|triste\",\n"
-    "  \"command\": \"start_mp3|none\",\n"
-    "  \"gpio_commands\": [{\"pin\": 4, \"state\": true}]\n"
-    "}\n"
-    "Use \"command\": \"start_mp3\" ONLY if the user explicitly asks to play music or start the player. "
-    "Otherwise, use \"none\". Return NOTHING except the valid JSON."
-)
-
-conversation_history = [{"role": "system", "content": SYSTEM_PROMPT}]
-
-# =========================
-# INITIALISATION ML PARALLÈLE
-# =========================
-
-import sys
-import concurrent.futures
-
-# Détermination automatique du bon fichier LLM à charger
-actual_llm_path = LLM_MODEL_PATH
-if not os.path.exists(actual_llm_path):
-    print(f"\n❌ ERREUR CRITIQUE : Modèle IA (GGUF) introuvable dans '{MODELS_DIR}'.")
-    sys.exit(1)
-
-if not os.path.exists(PIPER_MODEL):
-    print(f"\n❌ ERREUR CRITIQUE : Modèle de voix introuvable dans '{PIPER_MODEL}'.")
-    print("-> Veuillez placer 'fr_FR-siwis-medium.onnx' dans le dossier 'backend/piper/'.")
-    sys.exit(1)
-
-if not os.path.exists(PIPER_MODEL + ".json"):
-    print(f"\n❌ ERREUR CRITIQUE : Fichier de configuration phonétique Piper introuvable.")
-    print(f"Le fichier attendu est : '{PIPER_MODEL}.json'.")
-    sys.exit(1)
-
-print("⏳ Chargement des modèles IA en parallèle...")
-
-def load_whisper():
-    try:
-        # Utilisation de int8_float16 pour réduire considérablement la VRAM de Whisper (garde Whisper rapide sur GPU)
-        model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type="int8_float16")
-        print("✅ Whisper chargé (GPU - Optimisé VRAM)")
-        return model
-    except Exception as e:
-        model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
-        print("⚠️ Whisper chargé (CPU)")
-        return model
-
-def load_llama():
-    try:
-        # Vérification interne pour savoir si CUDA est réellement activé dans llama.cpp
-        import llama_cpp
-        if not llama_cpp.llama_supports_gpu_offload():
-            print("\n⚠️ AVERTISSEMENT : llama-cpp-python n'a pas été compilé avec le support CUDA !")
-            print("Le modèle tourne actuellement sur le CPU (très lent, 100% CPU, faible utilisation VRAM).")
-            print("Pour corriger : CMAKE_ARGS=\"-DGGML_CUDA=on\" pip install llama-cpp-python --force-reinstall --no-cache-dir\n")
-
-        model = Llama(
-            model_path=actual_llm_path,
-            # On fixe à 20 layers pour que LLaMA laisse environ 300-500 Mo de VRAM vides (les layers restantes iront sur le CPU)
-            n_gpu_layers=20,
-            n_ctx=4096,
-            verbose=False,
-            # Charge les poids via la mémoire virtuelle du système (Memory Mapping) pour réduire la RAM système
-            use_mmap=True,
-            use_mlock=False
-        )
-        if llama_cpp.llama_supports_gpu_offload():
-            print("✅ LLaMA chargé (GPU - CUDA)")
-        else:
-            print("⚠️ LLaMA chargé (CPU - TRES LENT)")
-        return model
-    except Exception as e:
-        print(f"\n❌ Erreur LLaMA: {e}")
-        sys.exit(1)
-
-def load_vad():
-    model = load_silero_vad()
+def load_models():
+    print("⏳ Chargement des modèles IA...")
+    
+    # 1. VAD
+    vad = load_silero_vad()
     print("✅ Silero VAD chargé")
-    return model
+    
+    # 2. Whisper
+    try:
+        whisper = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type="int8_float16")
+        print("✅ Whisper chargé (GPU - Optimisé VRAM)")
+    except:
+        whisper = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+        print("⚠️ Whisper chargé (CPU)")
 
-# Chargement séquentiel sécurisé pour éviter les conflits CUDA/VRAM au boot
-vad_model = load_vad()
-llm = load_llama()
-whisper = load_whisper()
+    # 3. LLaMA (Calcul dynamique VRAM - OPT-007)
+    n_layers = -1
+    try:
+        free_vram, total_vram = torch.cuda.mem_get_info()
+        MODEL_VRAM_MB = 2400
+        SAFETY_MARGIN_MB = 500
+        if free_vram < (MODEL_VRAM_MB + SAFETY_MARGIN_MB) * 1024 * 1024:
+            n_layers = 20
+            print(f"⚠️ VRAM faible, offload partiel: {n_layers} layers")
+        print(f"✅ LLaMA config: n_gpu_layers={n_layers} (VRAM libre: {free_vram/1024**2:.0f}MB)")
+    except:
+        n_layers = 0
 
-print("\n🚀 TOUS LES MODÈLES SONT PRÊTS. Serveur WebSocket en attente...")
+    llm = Llama(model_path=LLM_MODEL_PATH, n_gpu_layers=n_layers, n_ctx=4096, verbose=False, use_mmap=True)
+    print("✅ LLaMA chargé")
+    
+    return vad, whisper, llm
+
+vad_model, whisper, llm = load_models()
 
 # =========================
-# OUTILS
+# CLASSE SESSION ROBOT
 # =========================
+
+class RobotSession:
+    def __init__(self, websocket):
+        self.ws = websocket
+        self.history = [{"role": "system", "content": self._get_system_prompt()}]
+        self.is_speaking = False
+        self.robot_is_answering = False
+        self.interrupt_flag = False
+        self.audio_buffer = []
+        self.pre_roll = deque(maxlen=8)
+        self.silence_frames = 0
+        self.recording_start_time = 0
+        self.ambient_noise_rms = 0.01
+        self.calibrated = False
+        self.calib_count = 0
+        self.calib_samples = [] # OPT-003
+
+    def _get_system_prompt(self) -> str:
+        return (
+            "Tu es un robot assistant d'ingénierie. Réponds TOUJOURS en français pur, sans chichi. "
+            "Si l'utilisateur dit 'je veux écouter [titre]', 'mets [titre]', ou mentionne vouloir de la musique, "
+            "tu DOIS utiliser \"command\": \"play_song\" et extraire exactement le titre dans \"title\": \"[titre]\". "
+            "Par exemple, si on te dit 'je veux écouter L Morphine Skit', ton JSON sera : "
+            "{\"speech\": \"Je lance Skit de L Morphine.\", \"emotion\": \"joie\", \"command\": \"play_song\", \"title\": \"morphine\"}. "
+            "Sinon, utilise \"command\": \"none\" et choisis une émotion (neutre, ecoute, reflexion, parle, erreur). "
+            "Réponds STRICTEMENT au format JSON."
+        )
+
+    async def send_json(self, key: str, value: Any):
+        try:
+            await self.ws.send(json.dumps({key: value}))
+        except: pass
+
+    def trim_history(self, max_tokens: int = 3000): # OPT-004
+        total_chars = sum(len(str(m)) for m in self.history)
+        while total_chars > max_tokens * 4 and len(self.history) > 3:
+            removed = self.history.pop(1)
+            total_chars -= len(str(removed))
+            print(f"✂️ [TRIM] ~{total_chars//4} tokens restants")
 
 class JSONSpeechExtractor:
     def __init__(self):
         self.state = 'WAIT'
         self.buffer = ""
-
-    def extract_chunk(self, token):
+    def extract(self, token: str) -> str:
         self.buffer += token
         if self.state == 'WAIT':
-            match = re.search(r'"speech"\s*:\s*"', self.buffer)
-            if match:
-                self.state = 'EXTRACTING'
-                self.buffer = self.buffer[match.end():]
-            elif len(self.buffer) > 100:
-                self.buffer = self.buffer[-50:]
+            m = re.search(r'"speech"\s*:\s*"', self.buffer)
+            if m: self.state = 'EXT'; self.buffer = self.buffer[m.end():]
             return ""
-
-        if self.state == 'EXTRACTING':
-            match = re.search(r'(?<!\\)"', self.buffer)
-            if match:
-                self.state = 'FINISHED'
-                speech = self.buffer[:match.start()]
-                self.buffer = self.buffer[match.end():]
-                return speech
-            if len(self.buffer) > 1:
-                speech = self.buffer[:-1]
-                self.buffer = self.buffer[-1:]
-                return speech
+        if self.state == 'EXT':
+            m = re.search(r'(?<!\\)"', self.buffer)
+            if m: self.state = 'DONE'; res = self.buffer[:m.start()]; self.buffer = self.buffer[m.end():]; return res
+            if len(self.buffer) > 1: res = self.buffer[:-1]; self.buffer = self.buffer[-1:]; return res
         return ""
 
-def split_tts_sentence(buffer):
-    match = re.search(r'([.?!]+)', buffer)
-    if match and match.end() >= 10:
-        return buffer[:match.end()], buffer[match.end():]
-    return None, buffer
-
-# =========================
-# SERVEUR WEBSOCKET ASYNC
-# =========================
-
 async def handle_esp32_connection(websocket):
-    print(f"🔌 [SERVEUR] Nouveau robot connecté depuis {websocket.remote_address}")
-    is_speaking = False
-    robot_is_answering = False
-    interrupt_flag = False
-
-    import time
-    audio_buffer = []
-    pre_roll = deque(maxlen=8)
-    silence_frames = 0
-    silence_threshold = 20
-    MAX_RECORDING_TIME = 30.0 # [Correction] Timeout de sécurité en secondes
-    recording_start_time = 0
+    print(f"🔌 [SERVEUR] Connexion: {websocket.remote_address}")
+    # OPT-003: Informer l'ESP32 du début de calibration
+    await websocket.send(json.dumps({'status': 'connected', 'message': 'Calibration en cours...'}))
     
-    total_chunks_received = 0
+    session = RobotSession(websocket)
+    extractor = JSONSpeechExtractor()
 
-    async def send_json_command(key, value):
-        # Envoie un JSON plat, ex: {"status": "thinking"} ou {"emotion": "joie"}
-        payload = {key: value}
-        await websocket.send(json.dumps(payload))
+    async def run_llm_and_tts(text: str):
+        session.robot_is_answering = True
+        session.interrupt_flag = False
+        try: # FIX-009: Robustesse par try/finally
+            session.history.append({"role": "user", "content": text})
+            session.trim_history()
+            await session.send_json("status", "thinking")
+            
+            # FIX-012: Pacing dynamique corrigé
+            BYTES_PER_SAMPLE = 2
+            pacing = (AUDIO_CHUNK_SIZE_OUT / BYTES_PER_SAMPLE) / SAMPLE_RATE_TTS * 0.90
 
-    async def read_piper_stdout(piper_proc, websocket, state_container):
-        try:
-            while True:
-                if state_container["interrupt"]:
-                    piper_proc.terminate()
-                    break
-                # On lit des blocs de 4096 octets (2048 samples en 16-bit)
-                audio_out = await piper_proc.stdout.read(4096)
-                if not audio_out:
-                    break
-                await websocket.send(audio_out)
+            async with llm_lock:
+                proc = await asyncio.create_subprocess_exec(
+                    PIPER_BIN, "--model", PIPER_MODEL, "--output_raw",
+                    stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+                )
 
-                # --- Pacing Audio ---
-                # 4096 octets / 2 (car 16 bits = 2 octets) = 2048 samples
-                # 2048 samples à 22050 Hz représentent environ 0.092 secondes d'audio.
-                # On demande à Python d'attendre un peu avant d'envoyer le paquet suivant,
-                # sinon il sature la petite file d'attente (Queue) FreeRTOS de l'ESP32, ce qui cause des saccades.
-                await asyncio.sleep(0.08) # Légèrement inférieur à 0.092 pour garder un petit buffer d'avance
-        except Exception:
-            pass
+                async def pipe_out():
+                    try:
+                        while True:
+                            data = await proc.stdout.read(AUDIO_CHUNK_SIZE_OUT)
+                            if not data or session.interrupt_flag: break
+                            await session.ws.send(data)
+                            await asyncio.sleep(pacing)
+                    except: pass
 
-    def transcribe_audio(wav_path):
-        custom_vocab = "Terminale STE, ADC, ATC, PE, Transmettre, ESP32."
-        prompt_darija_tech = f"Bonjour. Kidayr labas? Wach nbedaw l'installation dial le serveur? {custom_vocab}"
-        segments, _ = whisper.transcribe(
-            wav_path,
-            task="translate",
-            beam_size=5, # Plus grand beam_size pour plus de précision
-            initial_prompt=prompt_darija_tech
-        )
-        return "".join([s.text for s in segments]).strip()
+                out_task = asyncio.create_task(pipe_out())
+                await session.send_json("status", "speaking")
+                
+                gen = await asyncio.to_thread(llm.create_chat_completion, messages=session.history, stream=True)
+                full_resp = ""
+                sentence_buffer = ""
+                for chunk in gen:
+                    if session.interrupt_flag: break
+                    token = chunk["choices"][0].get("delta", {}).get("content", "")
+                    full_resp += token
+                    sentence_buffer += token
+                    
+                    if any(p in token for p in ".!?"):
+                        proc.stdin.write(sentence_buffer.replace('\\n',' ').encode())
+                        await proc.stdin.drain()
+                        sentence_buffer = ""
 
-    async def run_llm_and_tts(transcribed_text):
-        nonlocal robot_is_answering, interrupt_flag
-        robot_is_answering = True
-        interrupt_flag = False
+                # OPT-005: Extraire emotion, command et title dès la fin du flux
+                try:
+                    json_match = re.search(r'\{.*\}', full_resp, re.DOTALL)
+                    if json_match:
+                        parsed = json.loads(json_match.group())
+                        if 'emotion' in parsed: await session.send_json('emotion', parsed['emotion'])
+                        if 'command' in parsed and parsed['command'] != 'none': 
+                            await session.send_json('command', parsed['command'])
+                            if 'title' in parsed: await session.send_json('play_title', parsed['title'])
+                except: pass
 
-        conversation_history.append({"role": "user", "content": transcribed_text})
-        await send_json_command("status", "thinking")
+                if sentence_buffer.strip() and not session.interrupt_flag:
+                    proc.stdin.write(sentence_buffer.encode()); await proc.stdin.drain()
+                
+                # FIX-010: Nettoyage Piper
+                proc.stdin.close()
+                out_task.cancel()
+                try: await out_task
+                except asyncio.CancelledError: pass
+                await proc.wait()
 
-        extractor = JSONSpeechExtractor()
-        tts_buffer = ""
-        full_llm_response = ""
-        emotion_sent = False
-        command_sent = False
-
-        piper_proc = await asyncio.create_subprocess_exec(
-            PIPER_BIN, "--model", PIPER_MODEL, "--output_raw",
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
-        )
-
-        state_container = {"interrupt": False}
-        stream_task = asyncio.create_task(read_piper_stdout(piper_proc, websocket, state_container))
-
-        def generate_llm_stream():
-            return llm.create_chat_completion(
-                messages=conversation_history,
-                max_tokens=200,
-                temperature=0.7,
-                stream=True
-            )
-
-        await send_json_command("status", "speaking")
-
-        # Wrapping the standard stream generator execution in a thread pool to unblock Asyncio event loop
-        stream_generator = await asyncio.to_thread(generate_llm_stream)
-
-        while True:
-            if interrupt_flag:
-                state_container["interrupt"] = True
-                break
-
-            try:
-                # Yield next token from generator in thread to prevent blocking
-                chunk = await asyncio.to_thread(next, stream_generator)
-            except StopIteration:
-                break
-
-            delta = chunk["choices"][0].get("delta", {})
-            if "content" in delta:
-                token = delta["content"]
-                full_llm_response += token
-
-                # N'envoyer l'émotion qu'une seule fois par réponse
-                if not emotion_sent:
-                    emotion_match = re.search(r'"emotion"\s*:\s*"([^"]+)"', full_llm_response)
-                    if emotion_match:
-                        await send_json_command("emotion", emotion_match.group(1))
-                        emotion_sent = True
-
-                # N'envoyer la commande qu'une seule fois par réponse
-                if not command_sent:
-                    command_match = re.search(r'"command"\s*:\s*"([^"]+)"', full_llm_response)
-                    if command_match and command_match.group(1) != "none":
-                        await send_json_command("command", command_match.group(1))
-                        command_sent = True
-
-                speech_part = extractor.extract_chunk(token)
-                if speech_part:
-                    speech_part = speech_part.replace('\\n', ' ').replace('\\"', '"')
-                    tts_buffer += speech_part
-
-                    sentence, tts_buffer = split_tts_sentence(tts_buffer)
-                    if sentence:
-                        piper_proc.stdin.write(sentence.encode("utf-8"))
-                        await piper_proc.stdin.drain()
-
-        if tts_buffer.strip() and not interrupt_flag:
-            piper_proc.stdin.write(tts_buffer.encode("utf-8"))
-            await piper_proc.stdin.drain()
-            piper_proc.stdin.close()
-
-        if interrupt_flag:
-            state_container["interrupt"] = True
-            if not piper_proc.stdin.is_closing():
-                piper_proc.stdin.close()
-
-        await stream_task
-
-        if piper_proc.returncode is None:
-            piper_proc.terminate()
-
-        robot_is_answering = False
-        await send_json_command("status", "idle")
-
-        if full_llm_response and not interrupt_flag:
-            conversation_history.append({"role": "assistant", "content": full_llm_response})
-            asyncio.create_task(synthese_memoire_background(transcribed_text, llm))
+            if full_resp and not session.interrupt_flag:
+                session.history.append({"role": "assistant", "content": full_resp})
+        except Exception as e:
+            print(f"❌ [LLM/TTS] Erreur: {e}")
+            await session.send_json("status", "error")
+        finally:
+            session.robot_is_answering = False
+            await session.send_json("status", "idle")
 
     try:
-        async for message in websocket:
-            if type(message) is bytes:
-                total_chunks_received += 1
-                if total_chunks_received % 100 == 0:
-                    print(f"🎤 [AUDIO] Reçu {total_chunks_received} paquets du robot...")
+        async for msg in websocket:
+            if not isinstance(msg, bytes): continue
+            chunk = np.frombuffer(msg, dtype=np.int16)
+            rms = np.sqrt(np.mean(chunk.astype(np.float32)**2)) / 32768.0
+            
+            if not session.calibrated:
+                session.calib_samples.append(rms)
+                session.calib_count += 1
+                if session.calib_count > 50:
+                    session.ambient_noise_rms = float(np.percentile(session.calib_samples, 10))
+                    session.calibrated = True
+                    print(f"✅ Calibré (p10): {session.ambient_noise_rms:.4f}")
+                continue
+
+            v_ts = get_speech_timestamps(torch.from_numpy(chunk.astype(np.float32)/32768.0), vad_model, sampling_rate=SAMPLE_RATE_MIC, threshold=0.3)
+            voice = len(v_ts) > 0
+            
+            if not session.is_speaking:
+                session.pre_roll.append(chunk)
+                b_threshold = max(0.03, session.ambient_noise_rms * 3)
+                if voice and (not session.robot_is_answering or rms > b_threshold):
+                    session.is_speaking = True
+                    session.recording_start_time = time.time()
+                    session.audio_buffer = list(session.pre_roll)
+                    if session.robot_is_answering: session.interrupt_flag = True
+            else:
+                session.audio_buffer.append(chunk)
+                if not voice: session.silence_frames += 1
+                else: session.silence_frames = 0
                 
-                chunk = np.frombuffer(message, dtype=np.int16)
-                audio_tensor = torch.from_numpy(chunk.astype(np.float32) / 32768.0)
-
-                # Calcul de l'énergie (RMS) pour le diagnostic
-                rms = np.sqrt(np.mean(audio_tensor.numpy()**2))
-                
-                # Abaissement du seuil de probabilité pour détecter la voix plus facilement
-                timestamps = await asyncio.to_thread(get_speech_timestamps, audio_tensor, vad_model, sampling_rate=SAMPLE_RATE_MIC, threshold=0.3)
-                voice_detected = len(timestamps) > 0
-
-                if total_chunks_received % 100 == 0:
-                    status = "VOIX 🎤" if voice_detected else "SILENCE 😶"
-                    print(f"🎤 [AUDIO] Vol: {rms:.4f} | {status} | Total: {total_chunks_received}")
-
-                if not is_speaking:
-                    pre_roll.append(chunk)
-                    if voice_detected:
-                        # Si le robot parle, on exige un volume (RMS) beaucoup plus fort pour déclencher le Barge-in
-                        # Cela évite que l'écho de son propre haut-parleur ne l'interrompe (AEC logiciel basique)
-                        barge_in_threshold = 0.05  # À ajuster empiriquement
-                        if robot_is_answering and rms < barge_in_threshold:
-                            continue # C'est sûrement de l'écho, on ignore
-
-                        is_speaking = True
-                        recording_start_time = time.time()
-                        audio_buffer.extend(list(pre_roll))
-                        pre_roll.clear()
-                        silence_frames = 0
-
-                        # Déclencher l'interruption
-                        if robot_is_answering:
-                            interrupt_flag = True
-                else:
-                    audio_buffer.append(chunk)
-                    if voice_detected:
-                        silence_frames = 0
-                    else:
-                        silence_frames += 1
-
-                    # [Correction] Forcer la fin de l'enregistrement s'il dure plus de 30 secondes (évite le OOM RAM)
-                    timeout_reached = (time.time() - recording_start_time) > MAX_RECORDING_TIME
-
-                    if silence_frames > silence_threshold or timeout_reached:
-                        is_speaking = False
-
-                        audio_data = np.concatenate(audio_buffer)
-                        await asyncio.to_thread(wav.write, INPUT_WAV, SAMPLE_RATE_MIC, audio_data)
-                        text = await asyncio.to_thread(transcribe_audio, INPUT_WAV)
-
-                        if text:
-                            asyncio.create_task(run_llm_and_tts(text))
-
-                        audio_buffer = []
-                        silence_frames = 0
-    except websockets.exceptions.ConnectionClosed:
-        pass
-
+                if session.silence_frames > 20 or (time.time() - session.recording_start_time > 30):
+                    session.is_speaking = False
+                    audio_data = np.concatenate(session.audio_buffer).astype(np.float32) / 32768.0
+                    def run_whisper():
+                        # FIX-003: Transcribe instead of translate
+                        segs, _ = whisper.transcribe(audio_data, task="transcribe", language="fr", beam_size=5, vad_filter=True)
+                        return "".join([s.text for s in segs]).strip()
+                    text = await asyncio.to_thread(run_whisper)
+                    if text: 
+                        print(f"📝 [WHISPER] {text}")
+                        asyncio.create_task(run_llm_and_tts(text))
+                    session.audio_buffer = []; session.silence_frames = 0
+    except Exception as e: print(f"⚠️ [SERVEUR] Déconnexion: {e}")
+    finally: print(f"🔌 [SERVEUR] Session terminée: {websocket.remote_address}")
 
 async def main():
-    import socket
-    async with websockets.serve(handle_esp32_connection, "0.0.0.0", 8765, family=socket.AF_INET, reuse_address=True, reuse_port=True):
+    # FIX-002: Désactiver ping_interval/timeout
+    async with websockets.serve(handle_esp32_connection, "0.0.0.0", 8765, ping_interval=None, ping_timeout=None, max_size=2**20):
+        print("\n🚀 [SERVEUR] Prêt ! Port 8765")
         await asyncio.Future()
 
 if __name__ == "__main__":

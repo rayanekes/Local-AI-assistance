@@ -32,6 +32,9 @@ public:
 
     // Fonction pour écrire des données vers le haut-parleur
     void writeSpeaker(const uint8_t *buffer, size_t bufferSize);
+
+private:
+    int32_t* _raw_buf = nullptr; // Buffer DMA pour INMP441 (FIX-007)
 };
 
 #endif // AUDIO_I2S_H

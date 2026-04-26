@@ -1,6 +1,12 @@
 #include "gui_spotify.h"
 #include <esp_heap_caps.h>
 
+GuiSpotify::GuiSpotify() 
+    : _tft(nullptr), title_label(nullptr), artist_label(nullptr),
+      progress_bar(nullptr), play_btn(nullptr), play_btn_label(nullptr),
+      time_label(nullptr), draw_buf(nullptr), buf1(nullptr),
+      disp_drv(nullptr), disp(nullptr), isPlayBtnClicked(false) {}
+
 // Le pointeur TFT est stocké globalement *seulement pour le callback LVGL*
 static TFT_eSPI* global_tft_ptr = nullptr;
 static lv_indev_drv_t indev_drv; // Driver pour le tactile
@@ -43,17 +49,22 @@ static void my_touchpad_read(lv_indev_drv_t * indev_driver, lv_indev_data_t * da
 }
 
 void GuiSpotify::init(TFT_eSPI* tft) {
+    if (disp != nullptr) return; // Déjà initialisé
+
     _tft = tft;
     global_tft_ptr = tft;
 
-    // Configuration de la calibration tactile par défaut (peut nécessiter un ajustement)
     uint16_t calData[5] = { 275, 3620, 264, 3532, 1 };
     _tft->setTouch(calData);
 
-    // Allocation dynamique d'un buffer de 1/10 d'écran (assez pour un ST7789 sur ESP32)
-    buf1 = (lv_color_t*)heap_caps_malloc(screenWidth * 24 * sizeof(lv_color_t), MALLOC_CAP_DMA);
+    buf1 = (lv_color_t*)malloc(screenWidth * 24 * sizeof(lv_color_t));
     draw_buf = (lv_disp_draw_buf_t*)malloc(sizeof(lv_disp_draw_buf_t));
     disp_drv = (lv_disp_drv_t*)malloc(sizeof(lv_disp_drv_t));
+
+    if (!buf1 || !draw_buf || !disp_drv) {
+        Serial.println("[GUI] Erreur allocation mémoire LVGL");
+        return;
+    }
 
     lv_disp_draw_buf_init(draw_buf, buf1, NULL, screenWidth * 24);
 
@@ -64,7 +75,6 @@ void GuiSpotify::init(TFT_eSPI* tft) {
     disp_drv->draw_buf = draw_buf;
     disp = lv_disp_drv_register(disp_drv);
 
-    // Initialisation du pilote tactile
     lv_indev_drv_init(&indev_drv);
     indev_drv.type = LV_INDEV_TYPE_POINTER;
     indev_drv.read_cb = my_touchpad_read;
@@ -78,22 +88,38 @@ static void play_event_cb(lv_event_t * e) {
     }
 }
 
-void GuiSpotify::buildInterface() {
-    // Style de base - Thème Sombre
-    lv_obj_t * scr = lv_scr_act();
-    lv_obj_set_style_bg_color(scr, lv_color_hex(0x121212), 0); // Couleur Spotify Dark
+static void quit_event_cb(lv_event_t * e) {
+    GuiSpotify * ui = (GuiSpotify *)lv_event_get_user_data(e);
+    if (ui) { ui->isQuitBtnClicked = true; }
+}
 
-    // Titre de la chanson
+void GuiSpotify::buildInterface() {
+    if (!disp) return;
+    lv_obj_t * scr = lv_disp_get_scr_act(disp);
+    if (!scr) return;
+    
+    lv_obj_set_style_bg_color(scr, lv_color_hex(0x121212), 0); // Couleur Spotify Dark
+    
+    // Bouton de sortie (petit 'X' en haut à droite)
+    quit_btn = lv_btn_create(scr);
+    lv_obj_set_size(quit_btn, 40, 40);
+    lv_obj_set_style_bg_color(quit_btn, lv_color_hex(0x333333), 0);
+    lv_obj_align(quit_btn, LV_ALIGN_TOP_RIGHT, -10, 10);
+    lv_obj_add_event_cb(quit_btn, quit_event_cb, LV_EVENT_CLICKED, this);
+    lv_obj_t * quit_label = lv_label_create(quit_btn);
+    lv_label_set_text(quit_label, LV_SYMBOL_CLOSE);
+    lv_obj_center(quit_label);
+
     title_label = lv_label_create(scr);
     lv_label_set_text(title_label, "Chargement...");
     lv_obj_set_style_text_color(title_label, lv_color_white(), 0);
     lv_obj_set_style_text_font(title_label, &lv_font_montserrat_20, 0);
     lv_obj_align(title_label, LV_ALIGN_TOP_MID, 0, 40);
 
-    // Artiste
     artist_label = lv_label_create(scr);
     lv_label_set_text(artist_label, "Artiste Inconnu");
-    lv_obj_set_style_text_color(artist_label, lv_color_hex(0xB3B3B3), 0); // Gris clair
+    lv_obj_set_style_text_color(artist_label, lv_color_hex(0xB3B3B3), 0);
+    lv_obj_set_style_text_font(artist_label, &lv_font_montserrat_14, 0);
     lv_obj_align(artist_label, LV_ALIGN_TOP_MID, 0, 70);
 
     // Barre de progression
@@ -148,16 +174,20 @@ void GuiSpotify::togglePlayPauseIcon(bool isPlaying) {
 }
 
 void GuiSpotify::deinit() {
-    // Nettoyage critique pour libérer la RAM avant le retour à l'IA
-    // Il faut nettoyer les objets AVANT de supprimer le display
-    lv_obj_clean(lv_scr_act());
+    if (!disp) return;
 
-    if(disp) {
-        lv_disp_remove(disp);
-    }
-    if (buf1) free(buf1);
-    if (draw_buf) free(draw_buf);
-    if (disp_drv) free(disp_drv);
+    // Supprime proprement l'écran et ses enfants
+    lv_obj_clean(lv_disp_get_scr_act(disp));
+
+    lv_indev_delete(indev_touchpad);
+    indev_touchpad = nullptr;
+
+    lv_disp_remove(disp);
+    disp = nullptr;
+
+    if (buf1) { free(buf1); buf1 = nullptr; }
+    if (draw_buf) { free(draw_buf); draw_buf = nullptr; }
+    if (disp_drv) { free(disp_drv); disp_drv = nullptr; }
 
     global_tft_ptr = nullptr;
 }

@@ -27,3 +27,4 @@ __pycache__/
 
 .gemini/
 gha-creds-*.json
+tests_isoles/

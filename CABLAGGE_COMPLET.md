@@ -1,37 +1,35 @@
-# Schéma de Câblage Complet - Robot IA Local
+# Guide de Câblage Définitif - Robot IA (Architecture v3.0)
 
-Ce document détaille les connexions matérielles pour l'ESP32, l'écran ST7789, l'audio I2S et le tactile.
+Ce document est la référence matérielle absolue pour le projet.
 
-## 1. Alimentation (Power)
-* **ESP32 VIN** : Connecté à la sortie 5V du régulateur Step-down.
-* **MAX98357A VIN** : Connecté au 5V (consomme beaucoup de courant lors des pics audio).
-* **GND** : Tous les GND (ESP32, Micro, HP, Écran) doivent être reliés ensemble.
+## 1. Plan des GPIO (ESP32)
 
-## 2. Bus SPI Partagé (Données)
-Trois composants partagent les fils de données. Reliez-les en "bus" sur votre plaque d'essai :
-* **MOSI (Données sortantes)** : ESP32 **GPIO 23** -> Vers SDI(Écran), MOSI(SD), T_DIN(Tactile).
-* **MISO (Données entrantes)** : ESP32 **GPIO 19** -> Vers SDO(SD), T_DO(Tactile).
-* **SCK (Horloge)** : ESP32 **GPIO 18** -> Vers SCL(Écran), SCK(SD), T_CLK(Tactile).
+| Composant | Signal | Pin ESP32 | Note |
+| :--- | :--- | :--- | :--- |
+| **Bus SPI** | SCK / MOSI / MISO | **18 / 23 / 19** | Bus partagé (Écran, SD, Touch) |
+| **Écran TFT** | CS / DC / RST | **14 / 21 / 4** | RST sur Pin 4 (Source de stabilité) |
+| **Carte SD** | CS | **5** | |
+| **Tactile** | CS | **13** | |
+| **Haut-Parleur**| DIN / LRC / BCLK | **12 / 26 / 27** | DIN déplacé sur 12 (évite I2C SDA) |
+| | **SD_MODE (Mute)**| **15** | **LOW = Muet**, HIGH = ON |
+| **Microphone** | WS / SCK / SD | **25 / 32 / 33** | L/R relié au GND |
 
-## 3. Sélections Individuelles (Chip Select & Commandes)
-Chaque composant possède ses propres fils de contrôle :
-* **Écran TFT CS** : **GPIO 14**
-* **Écran DC** : **GPIO 21**
-* **Écran RST** : **GPIO 4**
-* **Carte SD CS** : **GPIO 5**
-* **Tactile T_CS** : **GPIO 13**
+## 2. Bus SPI Partagé
+Reliez les broches suivantes en parallèle (en "bus") :
+1.  **SCK (18)** -> SCK(Écran) + SCK(SD) + T_CLK(Tactile)
+2.  **MOSI (23)** -> SDI(Écran) + MOSI(SD) + T_DIN(Tactile)
+3.  **MISO (19)** -> SDO(SD) + T_DO(Tactile)
 
-## 4. Audio I2S
-### Entrée (Microphone INMP441)
-* **WS** : **GPIO 25**
-* **SCK** : **GPIO 32**
-* **SD** : **GPIO 33**
-* **L/R** : GND
+## 3. Filtrage et Alimentation (Crucial pour le son)
+Pour éliminer le souffle et les craquements :
+*   **Alimentation Ampli :** Condensateur **100µF** + **100nF** entre le VIN (5V) et le GND du MAX98357A.
+*   **Alimentation Micro :** Condensateur **10µF** + **100nF** entre le VCC (3.3V) et le GND du INMP441.
+*   **Gain :** Résistance de **10kΩ** entre la pin GAIN du haut-parleur et le GND.
+*   **Mute :** Résistance de **390kΩ** entre la pin SD du haut-parleur et le 5V (Pull-up de sécurité).
 
-### Sortie (Haut-Parleur MAX98357A)
-* **LRC (WS)** : **GPIO 26**
-* **BCLK** : **GPIO 27**
-* **DIN** : **GPIO 22**
+## 4. Format des Fichiers SD
+*   **UI :** Dossier `/ui/` contenant des fichiers `.gif` optimisés (320x240, 16 couleurs).
+*   **Musique :** Dossier `/music/` contenant des fichiers `.mp3`.
 
 ---
-*Dernière mise à jour : 23 Avril 2026*
+*Fichier généré le 23 Avril 2026 - Certifié Stable*

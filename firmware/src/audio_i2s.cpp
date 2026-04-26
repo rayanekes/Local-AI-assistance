@@ -22,6 +22,8 @@ void Audio_I2S::initMic() {
 
     i2s_driver_install(I2S_MIC_PORT, &i2s_mic_config, 0, NULL);
     i2s_set_pin(I2S_MIC_PORT, &i2s_mic_pins);
+    
+    _raw_buf = (int32_t*)heap_caps_malloc(1024 * sizeof(int32_t), MALLOC_CAP_DMA);
     Serial.println("Microphone I2S (INMP441) initialisé.");
 }
 
@@ -69,12 +71,13 @@ void Audio_I2S::uninstallSpeaker() {
 
 size_t Audio_I2S::readMic(int16_t *buffer, size_t bufferSize) {
     size_t bytesRead = 0;
-    static int32_t raw_buffer[1024]; 
-    i2s_read(I2S_MIC_PORT, raw_buffer, sizeof(raw_buffer), &bytesRead, portMAX_DELAY);
-    
+    if (!_raw_buf) return 0;
+
+    i2s_read(I2S_MIC_PORT, _raw_buf, 1024 * 4, &bytesRead, portMAX_DELAY);
+
     int samplesRead = bytesRead / 4;
     for (int i = 0; i < samplesRead; i++) {
-        int32_t val = raw_buffer[i] >> 11;
+        int32_t val = _raw_buf[i] >> 14;
         if (val > 32767) val = 32767;
         if (val < -32768) val = -32768;
         buffer[i] = (int16_t)val;

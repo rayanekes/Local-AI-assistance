@@ -1,43 +1,45 @@
 {
-  "project_name": "Robot Assistant IA Local Temps Réel (Rayane)",
-  "goal": "Développer un Agent Autonome IA conversationnel fonctionnant 100% en local, avec latence ultra-faible, gestion des interruptions (Barge-in), mémoire dynamique et interface multimédia Spotify-like.",
+  "project_name": "Robot Assistant IA Local (v3.0_stable)",
+  "version": "3.0.0",
+  "goal": "Agent conversationnel autonome 100% local avec interface Spotify-like et animations GIF fluides.",
   "hardware_config": {
-    "microcontroller": "ESP32 (Dual-Core)",
-    "input_audio": "Microphone INMP441 (I2S, 16kHz, 32-bit raw) - Gain logiciel x32 (Bit-shift 11). Pins: WS=25, SCK=32, SD=33",
-    "output_audio": "Haut-parleur MAX98357A (I2S, 22.05kHz, 16-bit). Broche SD couplée au 5V via R 390k pour mono gauche. Pins: LRC_WS=26, BCLK=27, DIN=22",
-    "display": "Écran TFT ST7789 (2.4\", 240x320) + Tactile XPT2046 + Lecteur SD intégré.",
-    "spi_bus_shared": {
-      "MOSI": 23, "MISO": 19, "SCK": 18, 
-      "TFT_CS": 14, "TFT_DC": 21, "TFT_RST": 4, 
-      "SD_CS": 5, "TOUCH_CS": 13,
-      "frequencies": "TFT: 20MHz, SD: 4MHz (optimisé pour câbles Dupont)"
+    "mcu": "ESP32 DevKit (dual-core 240MHz, 520KB SRAM)",
+    "gpio_map": {
+      "SPI_BUS": { "SCK": 18, "MOSI": 23, "MISO": 19, "note": "Shared bus for TFT, SD, and Touch" },
+      "TFT_ST7789": { "CS": 14, "DC": 21, "RST": 4, "freq": "20MHz" },
+      "SD_CARD": { "CS": 5, "freq": "4MHz" },
+      "TOUCH_XPT2046": { "CS": 13 },
+      "AUDIO_OUT_MAX98357A": { "LRC": 26, "BCLK": 27, "DIN": 12, "SD_MODE": 15 },
+      "AUDIO_IN_INMP441": { "WS": 25, "SCK": 32, "SD": 33, "LR_PIN": "GND" }
+    },
+    "passive_components": {
+      "filtering": "100µF + 100nF on MAX98357A VIN; 10µF + 100nF on INMP441 VCC",
+      "audio_gain": "10kΩ resistor on MAX GAIN to GND (~3.6dB)",
+      "amplifier_sd": "390kΩ pull-up on MAX SD to 5V (hardware limit)"
     }
   },
   "software_stack": {
-    "backend_python": {
-      "stt": "faster-whisper (modèle medium, float16, CUDA).",
-      "vad": "silero_vad (threshold=0.3).",
-      "llm": "llama-cpp-python (Qwen2.5-3B-Instruct-Q5_K_M.gguf pour stabilité VRAM 6Go).",
-      "tts": "Piper (fr_FR-siwis-medium.onnx) avec chemin absolu vers le binaire.",
-      "networking": "WebSocket asynchrone (port 8765)."
+    "firmware": {
+      "rtos": "FreeRTOS (Net:P3/C0, Orc:P2/C1, Disp:P1/C1, Mic:P4/C1, Spk:P5/C1)",
+      "features": ["WiFiMulti", "Auto-IP Detection (10.42.0.1 / 192.168.11.113)", "Dynamic Memory Allocation", "Task Watchdog (30s)"],
+      "audio_fix": "I2S driver forced uninstall during mode switching (Spotify <-> AI)"
     },
-    "firmware_cpp": {
-      "framework": "Arduino (PlatformIO).",
-      "architecture": "FreeRTOS (Core 0: Réseau, Core 1: Audio/UI). Allocation dynamique des objets pour économiser la SRAM.",
-      "features": [
-        "WiFiMulti: Connexion automatique à 'Linux_ya_jdk' (Hotspot) ou 'LB_ADSL_EGPK' (Box).",
-        "Auto-Detection IP: Bascule entre 10.42.0.1 et 192.168.11.113.",
-        "Zero-Hiss Init: Broches audio en haute impédance au boot pour supprimer le souffle.",
-        "LVGL 8.3: Interface Spotify-like chargée dynamiquement en mode Musique."
-      ]
+    "backend_python": {
+      "stt": "faster-whisper (medium, int8_float16, CUDA)",
+      "vad": "silero_vad (threshold 0.3, adaptive barge-in)",
+      "llm": "llama-cpp-python (Qwen2.5-3B-Instruct-GGUF, auto-vram n_gpu_layers)",
+      "tts": "Piper (fr_FR-siwis-medium.onnx, absolute path mapping)",
+      "concurrency": "RobotSession class for multi-client isolation, Lock() on LLM calls"
     }
   },
-  "current_focus": "Validation finale de la boucle de conversation et optimisation de la réactivité du micro.",
-  "history_fixes": [
-    "Résolution du conflit I2S entre la voix IA et le lecteur MP3 par désinstallation dynamique du driver.",
-    "Fix des redémarrages en boucle en remplaçant les objets globaux par des pointeurs alloués dans le setup.",
-    "Suppression du sifflement au démarrage par verrouillage de la broche DIN à LOW.",
-    "Correction de l'écran blanc ST7789 via un reset matériel forcé sur le GPIO 4.",
-    "Amélioration de la transcription par gain logiciel x32 sur le micro INMP441 (shift de bits)."
-  ]
+  "ui_state_machine": {
+    "format": "GIF_Animated_Delta_Frames (320x240, 16 colors, 15fps)",
+    "states": {
+      "IDLE": "/ui/neutre.gif",
+      "LISTENING": "/ui/ecoute.gif",
+      "THINKING": "/ui/reflexion.gif",
+      "SPEAKING": "/ui/parle.gif",
+      "ERROR": "/ui/erreur.gif"
+    }
+  }
 }
