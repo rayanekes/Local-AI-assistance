@@ -19,14 +19,118 @@ void TFT_Display::init() {
   } else {
     Serial.println("Carte SD initialisée.");
     tft.println("SD OK!");
+    // Draw the static background once
+    drawBmp("/base.bmp", 0, 0);
   }
 }
 
 void TFT_Display::displayEmotion(String emotion, int frame) {
-  // Construit le chemin avec le numéro de frame (ex: "/joie_1.bmp")
-  String bmpPath = "/" + emotion + "_" + String(frame) + ".bmp";
-  tft.fillScreen(TFT_BLACK); // Nettoyer l'écran avant d'afficher
-  drawBmp(bmpPath.c_str(), 0, 0);
+  // Use vector graphics to draw the face instead of loading a BMP
+  // Clean the facial region only (background color 20, 20, 30)
+  tft.fillRect(40, 40, 240, 200, tft.color565(20, 20, 30));
+
+  uint16_t mainColor;
+  int eyeW, eyeH;
+  int offsetY = 0;
+
+  if (emotion == "neutre") {
+    mainColor = tft.color565(0, 255, 255); // Cyan
+    eyeW = 40; eyeH = 60;
+  } else if (emotion == "joie") {
+    mainColor = tft.color565(255, 200, 0); // Jaune vif
+    eyeW = 45; eyeH = 45;
+  } else if (emotion == "triste") {
+    mainColor = tft.color565(100, 150, 255); // Bleu triste
+    eyeW = 40; eyeH = 50;
+  } else if (emotion == "parle") {
+    mainColor = tft.color565(0, 255, 100); // Vert menthe
+    eyeW = 40; eyeH = 60;
+  } else if (emotion == "reflexion") {
+    mainColor = tft.color565(255, 50, 255); // Magenta
+    eyeW = 50; eyeH = 50;
+  } else {
+    // Default
+    mainColor = tft.color565(0, 255, 255);
+    eyeW = 40; eyeH = 60;
+  }
+
+  if (frame == 2 && emotion != "reflexion") {
+    eyeH = 10;
+    offsetY = 25;
+  }
+
+  // Draw cheeks
+  if (frame == 1 && (emotion == "joie" || emotion == "parle" || emotion == "neutre")) {
+    tft.fillEllipse(65, 125, 15, 15, tft.color565(255, 100, 150));
+    tft.fillEllipse(255, 125, 15, 15, tft.color565(255, 100, 150));
+  }
+
+  // Draw eyes and mouth
+  if (emotion == "neutre") {
+    tft.fillRoundRect(80, 60 + offsetY, eyeW, eyeH, 10, mainColor);
+    tft.fillRoundRect(200, 60 + offsetY, eyeW, eyeH, 10, mainColor);
+    // Mouth
+    tft.fillRect(100, 174, 120, 12, mainColor); // Line width 12 -> rect height 12
+  } else if (emotion == "joie") {
+    if (frame == 2) {
+      tft.fillRect(70, 72, 60, 15, mainColor);
+      tft.fillRect(190, 72, 60, 15, mainColor);
+    } else {
+      // Arc simulation (simplified) for eyes - using filled circles and erasing half
+      tft.fillCircle(100, 80, 30, mainColor);
+      tft.fillCircle(100, 80 + 15, 30, tft.color565(20, 20, 30)); // Erase lower part
+      tft.fillCircle(220, 80, 30, mainColor);
+      tft.fillCircle(220, 80 + 15, 30, tft.color565(20, 20, 30));
+    }
+    // Grosse bouche souriante
+    tft.fillCircle(160, 160, 60, mainColor);
+    tft.fillCircle(160, 160 - 20, 60, tft.color565(20, 20, 30)); // Erase upper part
+  } else if (emotion == "triste") {
+    tft.fillRoundRect(80, 60 + offsetY, eyeW, eyeH, 5, mainColor);
+    tft.fillRoundRect(200, 60 + offsetY, eyeW, eyeH, 5, mainColor);
+    if (frame == 2) {
+      // Larmes
+      tft.fillEllipse(100, 140, 10, 10, tft.color565(50, 200, 255));
+      tft.fillEllipse(220, 140, 10, 10, tft.color565(50, 200, 255));
+    }
+    // Sad mouth
+    tft.fillCircle(160, 195, 60, mainColor);
+    tft.fillCircle(160, 195 + 15, 60, tft.color565(20, 20, 30));
+  } else if (emotion == "parle") {
+    tft.fillRoundRect(80, 60 + offsetY, eyeW, eyeH, 10, mainColor);
+    tft.fillRoundRect(200, 60 + offsetY, eyeW, eyeH, 10, mainColor);
+    // Bouche
+    int mouthH = (frame == 1) ? 10 : 50;
+    tft.fillEllipse(160, 160 + mouthH/2, 40, mouthH/2, tft.color565(255, 50, 50));
+  } else if (emotion == "reflexion") {
+    // Yeux
+    tft.fillEllipse(100, 80, 30, 30, mainColor);
+    tft.fillRect(200, 72, 50, 15, mainColor);
+
+    // Bouche tordue
+    // Simplified twisted mouth
+    tft.drawLine(100, 190, 160, 190, mainColor);
+    tft.drawLine(160, 190, 220, 170, mainColor);
+    // thicker lines by drawing adjacent lines
+    for(int i=-4; i<=5; i++) {
+        tft.drawLine(100, 190+i, 160, 190+i, mainColor);
+        tft.drawLine(160, 190+i, 220, 170+i, mainColor);
+    }
+
+    if (frame == 2) {
+      tft.setTextSize(5);
+      tft.setTextColor(tft.color565(255, 255, 0));
+      tft.setCursor(250, 20);
+      tft.print("?");
+      tft.fillEllipse(57, 37, 7, 7, TFT_WHITE);
+    } else {
+      tft.setTextSize(4);
+      tft.setTextColor(tft.color565(255, 200, 0));
+      tft.setCursor(250, 10);
+      tft.print("?");
+      tft.fillEllipse(35, 55, 5, 5, tft.color565(200, 200, 200));
+    }
+  }
 }
 
 void TFT_Display::drawBmp(const char *filename, int16_t x, int16_t y) {
