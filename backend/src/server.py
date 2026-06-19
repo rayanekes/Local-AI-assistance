@@ -40,16 +40,22 @@ def sauvegarder_memoire(nouveau_contexte):
 async def synthese_memoire_background(nouvelle_info, llm_instance):
     mem_actuelle = charger_memoire()
 
-    prompt_synthese = (
-        f"Tu es un module cognitif. Voici la mémoire actuelle de l'utilisateur: '{mem_actuelle}'. "
-        f"Voici la dernière information de la conversation: '{nouvelle_info}'. "
-        "Mets à jour la mémoire globale en une phrase concise en français, sans aucun format JSON."
+    system_prompt = (
+        "Tu es un module cognitif. Ton rôle est de mettre à jour la mémoire globale de l'utilisateur "
+        "en fonction de la mémoire actuelle et de la dernière information reçue. "
+        "Réponds par une seule phrase concise en français, sans aucun format JSON."
     )
+
+    # Séparation des instructions (System) des données utilisateur (User) pour éviter l'injection de prompt
+    user_content = f"Mémoire actuelle : {mem_actuelle}\nDernière information : {nouvelle_info}"
 
     try:
         def run_llm():
             return llm_instance.create_chat_completion(
-                messages=[{"role": "system", "content": prompt_synthese}],
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ],
                 max_tokens=50,
                 temperature=0.3
             )
